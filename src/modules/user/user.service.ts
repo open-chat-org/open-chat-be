@@ -1,11 +1,14 @@
 import {
   ConflictException,
   Injectable,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { RegisterX25519PublicKeyDto } from './dto/register_x25519_public_key.dto';
 import { UpdateUserProfileDto } from './dto/update_user_profile.dto';
 import { verify_profile_signature } from './utils/profile_signature.util';
+import { verify_x25519_public_key_signature } from './utils/x25519_public_key_signature.util';
 
 @Injectable()
 export class UserService {
@@ -19,6 +22,38 @@ export class UserService {
       select: {
         public_key: true,
         createdAt: true,
+      },
+    });
+  }
+
+  async store_x25519_public_key(
+    public_key: string,
+    register_x25519_public_key_dto: RegisterX25519PublicKeyDto,
+  ) {
+    const is_valid_signature = await verify_x25519_public_key_signature(
+      public_key,
+      register_x25519_public_key_dto,
+    );
+
+    if (!is_valid_signature) {
+      throw new UnauthorizedException(
+        'X25519 public key signature verification failed.',
+      );
+    }
+
+    return this.prisma_service.user.upsert({
+      where: { public_key },
+      update: {
+        x25519_public_key: register_x25519_public_key_dto.x25519_public_key,
+      },
+      create: {
+        public_key,
+        x25519_public_key: register_x25519_public_key_dto.x25519_public_key,
+      },
+      select: {
+        public_key: true,
+        x25519_public_key: true,
+        updatedAt: true,
       },
     });
   }
@@ -86,6 +121,25 @@ export class UserService {
 
       return Boolean(normalized_username || normalized_name);
     });
+  }
+
+  async get_user_key_bundle(public_key: string) {
+    const user = await this.prisma_service.user.findUnique({
+      where: { public_key },
+      select: {
+        public_key: true,
+        x25519_public_key: true,
+      },
+    });
+
+    if (!user?.x25519_public_key) {
+      throw new NotFoundException('User key bundle is not available.');
+    }
+
+    return {
+      public_key: user.public_key,
+      x25519_public_key: user.x25519_public_key,
+    };
   }
 
   async update_user_profile(

@@ -15,6 +15,7 @@ datasource db {
 
 model User {
   public_key      String   @unique @map("public_key")
+  x25519_public_key String? @unique @map("x25519_public_key")
   username        String?  @unique @map("username")
   name            String?  @map("name")
   quote           String?  @map("quote")
