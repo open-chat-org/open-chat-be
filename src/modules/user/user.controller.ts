@@ -6,9 +6,11 @@ import {
   HttpStatus,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import { PublicKeyHeader } from '../../common/decorators/public_key_header.decorator';
 import { PublicKeyHeaderPipe } from '../../common/pipes/public_key_header.pipe';
+import { SearchUsersDto } from './dto/search_users.dto';
 import { UpdateUserProfileDto } from './dto/update_user_profile.dto';
 import { UserService } from './user.service';
 
@@ -29,6 +31,14 @@ export class UserController {
     @PublicKeyHeader(new PublicKeyHeaderPipe()) public_key: string,
   ) {
     return this.user_service.get_user_profile(public_key);
+  }
+
+  @Get('search')
+  async search_users(
+    @PublicKeyHeader(new PublicKeyHeaderPipe()) public_key: string,
+    @Query() search_users_dto: SearchUsersDto,
+  ) {
+    return this.user_service.search_users(public_key, search_users_dto.query);
   }
 
   @Patch('profile')

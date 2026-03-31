@@ -1,5 +1,5 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
-import { generateKeyPairSync } from 'node:crypto';
+import { createPrivateKey, generateKeyPairSync, sign } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -80,6 +80,21 @@ export class ServerIdentityService implements OnModuleInit {
       algorithm: 'ed25519',
       public_key: server_identity.public_key,
     };
+  }
+
+  async sign_message(message: string | Uint8Array) {
+    const server_identity = await this.ensure_server_identity();
+    const private_key = createPrivateKey({
+      key: server_identity.private_key_jwk,
+      format: 'jwk',
+    });
+    const signature = sign(
+      null,
+      typeof message === 'string' ? Buffer.from(message, 'utf8') : message,
+      private_key,
+    );
+
+    return `0x${signature.toString('hex')}`;
   }
 
   private async read_existing_server_identity(): Promise<ServerIdentity | null> {

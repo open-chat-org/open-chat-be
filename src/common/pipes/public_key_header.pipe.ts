@@ -7,7 +7,10 @@ export class PublicKeyHeaderPipe implements PipeTransform {
       throw new BadRequestException('x-public-key header is required.');
     }
 
-    const public_key = value.trim();
+    const raw_public_key = value.trim();
+    const public_key = raw_public_key.startsWith('0x')
+      ? raw_public_key
+      : `0x${raw_public_key}`;
 
     if (!public_key) {
       throw new BadRequestException('x-public-key header is required.');

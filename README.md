@@ -116,6 +116,115 @@ export class CreateChatRoomDto {}
 - Validate required environment variables before app startup when possible.
 - Never hardcode secrets, URLs, or credentials in source files.
 
+## Realtime Architecture
+
+The backend realtime layer is built on native WebSocket plus Redis.
+
+It is designed as a reusable transport component, not as chat business logic. That means the realtime module is responsible for connection handling, authentication, reconnect behavior, heartbeat, room fanout, and reliable delivery. Future chat features should call the realtime service instead of implementing socket behavior directly.
+
+### Realtime Flow
+
+The realtime connection flow works like this:
+
+1. The client requests `POST /realtime/challenge` with `x-public-key`.
+2. The server creates a short-lived challenge, signs it with the server private key, and returns:
+   - `challenge_id`
+   - `nonce`
+   - `expires_at`
+   - `server_public_key`
+   - `server_signature`
+3. The client signs the challenge message with its own private key.
+4. The client opens the WebSocket connection and sends the first frame as `auth.connect`.
+5. The server verifies:
+   - the challenge exists
+   - the challenge is not expired
+   - the challenge was not already used
+   - the client signature matches the provided public key
+6. After verification, the server creates or restores the realtime session.
+7. The session automatically joins the personal room: `user:{public_key}`.
+8. Reliable events are delivered with an envelope that supports ack and retry.
+9. Redis is used so the same behavior works across multiple backend nodes.
+
+### Realtime Responsibilities
+
+- WebSocket transport: accept connections and handle realtime frames.
+- Signed auth: verify the client owns the public key it claims.
+- Session restore: allow reconnect with `last_session_id`.
+- Heartbeat: detect stale sockets and close dead connections.
+- Rooms: manage `user:{public_key}` and `chat:{room_id}` memberships.
+- Reliable delivery: track pending events, accept `delivery.ack`, and retry failed deliveries.
+- Redis fanout: publish room events so all backend nodes can deliver to their local clients.
+
+### Realtime Files
+
+Use this module structure as the reference for future realtime work:
+
+```text
+src/modules/realtime/
+  constants/
+    realtime.constants.ts
+  services/
+    realtime_redis.service.ts
+    realtime_challenge.service.ts
+    realtime_session.service.ts
+    realtime_connection.service.ts
+    realtime_room.service.ts
+    realtime_delivery.service.ts
+    realtime_fanout.service.ts
+    realtime.service.ts
+  types/
+    realtime.types.ts
+  utils/
+    realtime_keys.util.ts
+    realtime_room.util.ts
+    realtime_signature.util.ts
+  realtime.controller.ts
+  realtime.gateway.ts
+  realtime.module.ts
+```
+
+File responsibilities:
+
+- `realtime.module.ts`: wires the full realtime component together and exports the reusable realtime service.
+- `realtime.controller.ts`: exposes REST endpoints related to realtime bootstrap, currently the challenge endpoint.
+- `realtime.gateway.ts`: receives WebSocket connections and handles realtime frame events like `auth.connect` and `delivery.ack`.
+- `realtime.constants.ts`: shared realtime injection keys and Redis channel names.
+- `realtime.types.ts`: shared transport, session, room, and envelope types.
+- `realtime_redis.service.ts`: owns Redis clients, subscriptions, and publish/subscribe helpers.
+- `realtime_challenge.service.ts`: creates signed auth challenges and verifies challenge usage.
+- `realtime_session.service.ts`: creates, restores, touches, and disconnects realtime sessions in Redis.
+- `realtime_connection.service.ts`: tracks live WebSocket clients on the current node and manages ping/pong heartbeat.
+- `realtime_room.service.ts`: stores and restores room membership and keeps local room indexes in sync.
+- `realtime_delivery.service.ts`: stores pending reliable envelopes, accepts ack, and retries unacked events.
+- `realtime_fanout.service.ts`: publishes room events through Redis and delivers them to local node sessions.
+- `realtime.service.ts`: public internal API for other backend modules to emit to users or rooms and manage room membership.
+- `realtime_keys.util.ts`: builds Redis key names for challenges, sessions, rooms, and pending deliveries.
+- `realtime_room.util.ts`: creates standardized room names.
+- `realtime_signature.util.ts`: normalizes keys and signatures, builds the canonical challenge message, and verifies client signatures.
+
+### Realtime Rules
+
+- Keep transport logic inside the realtime module.
+- Do not place chat-specific business rules directly inside the gateway.
+- Use `RealtimeService` when another module needs to emit to a user or room.
+- Keep Redis key naming centralized in realtime utils.
+- Keep all frame payloads typed in `realtime.types.ts`.
+- Do not bypass signed challenge auth for client websocket connections.
+- Preserve the reliable envelope contract when adding new realtime events.
+
+### Realtime Environment Variables
+
+Document and keep these values consistent:
+
+- `REDIS_URL`
+- `WS_PATH`
+- `WS_CHALLENGE_TTL_SECONDS`
+- `WS_RECONNECT_GRACE_MS`
+- `WS_PING_INTERVAL_MS`
+- `WS_MISSED_PONG_LIMIT`
+- `WS_ACK_TIMEOUT_MS`
+- `WS_MAX_RETRIES`
+
 ## Testing Rules
 
 - Place unit tests next to the related source file when practical, using `*.spec.ts`.
