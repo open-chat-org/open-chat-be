@@ -51,7 +51,8 @@ export const AnyNull = runtime.AnyNull
 
 
 export const ModelName = {
-  User: 'User'
+  User: 'User',
+  DirectMessage: 'DirectMessage'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -84,6 +85,23 @@ export const UserScalarFieldEnum = {
 } as const
 
 export type UserScalarFieldEnum = (typeof UserScalarFieldEnum)[keyof typeof UserScalarFieldEnum]
+
+
+export const DirectMessageScalarFieldEnum = {
+  id: 'id',
+  sender_public_key: 'sender_public_key',
+  sender_x25519_public_key: 'sender_x25519_public_key',
+  recipient_public_key: 'recipient_public_key',
+  message: 'message',
+  message_hash: 'message_hash',
+  sender_signature: 'sender_signature',
+  send_time: 'send_time',
+  algorithm: 'algorithm',
+  createdAt: 'createdAt',
+  expiresAt: 'expiresAt'
+} as const
+
+export type DirectMessageScalarFieldEnum = (typeof DirectMessageScalarFieldEnum)[keyof typeof DirectMessageScalarFieldEnum]
 
 
 export const SortOrder = {

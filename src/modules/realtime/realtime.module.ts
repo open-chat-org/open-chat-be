@@ -1,5 +1,6 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { DirectMessageModule } from '../direct_message/direct_message.module';
 import { ServerIdentityModule } from '../server_identity/server_identity.module';
 import { REALTIME_NODE_ID } from './constants/realtime.constants';
 import { RealtimeController } from './realtime.controller';
@@ -14,7 +15,7 @@ import { RealtimeService } from './services/realtime.service';
 import { RealtimeSessionService } from './services/realtime_session.service';
 
 @Module({
-  imports: [ServerIdentityModule],
+  imports: [ServerIdentityModule, forwardRef(() => DirectMessageModule)],
   controllers: [RealtimeController],
   providers: [
     {

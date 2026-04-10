@@ -59,6 +59,14 @@ export class UserController {
     return this.user_service.get_user_key_bundle(public_key);
   }
 
+  @Get('public_profile')
+  async get_user_public_profile(
+    @PublicKeyHeader(new PublicKeyHeaderPipe()) _requester_public_key: string,
+    @Query('public_key', new PublicKeyHeaderPipe()) public_key: string,
+  ) {
+    return this.user_service.get_user_public_profile(public_key);
+  }
+
   @Patch('profile')
   @HttpCode(HttpStatus.OK)
   async update_user_profile(

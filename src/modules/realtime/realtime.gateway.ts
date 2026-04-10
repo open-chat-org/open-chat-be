@@ -15,6 +15,7 @@ import {
 import { get_realtime_config } from '../../config/realtime.config';
 import WebSocket, { Server } from 'ws';
 import { randomUUID } from 'node:crypto';
+import { DirectMessageService } from '../direct_message/direct_message.service';
 import { RealtimeChallengeService } from './services/realtime_challenge.service';
 import { RealtimeConnectionService } from './services/realtime_connection.service';
 import { RealtimeDeliveryService } from './services/realtime_delivery.service';
@@ -23,6 +24,16 @@ import { RealtimeSessionService } from './services/realtime_session.service';
 import { create_user_room_name } from './utils/realtime_room.util';
 import { parse_auth_connect_payload } from './utils/realtime_signature.util';
 import { DeliveryAckPayload } from './types/realtime.types';
+
+type AuthenticatedSocketState = {
+  auth_timeout: NodeJS.Timeout | null;
+  authenticated: true;
+  awaiting_pong: boolean;
+  missed_pongs: number;
+  public_key: string;
+  session_id: string;
+  socket_id: string;
+};
 
 @WebSocketGateway({
   path: get_realtime_config().ws_path,
@@ -33,6 +44,7 @@ export class RealtimeGateway
   private readonly logger = new Logger(RealtimeGateway.name);
 
   constructor(
+    private readonly direct_message_service: DirectMessageService,
     private readonly realtime_challenge_service: RealtimeChallengeService,
     private readonly realtime_connection_service: RealtimeConnectionService,
     private readonly realtime_delivery_service: RealtimeDeliveryService,
@@ -159,15 +171,8 @@ export class RealtimeGateway
     @ConnectedSocket() client: WebSocket,
     @MessageBody() body: unknown,
   ) {
-    const state = this.realtime_connection_service.get_authenticated_state(client);
-
-    if (!state?.session_id) {
-      this.send_system_error(client, 'Socket is not authenticated.');
-      client.close(4401, 'Socket is not authenticated');
-      return;
-    }
-
     try {
+      const state = this.get_authenticated_state(client);
       const payload = this.parse_delivery_ack_payload(body);
 
       await this.realtime_delivery_service.acknowledge(state.session_id, payload);
@@ -175,6 +180,61 @@ export class RealtimeGateway
       this.send_system_error(
         client,
         error instanceof Error ? error.message : 'Invalid delivery ack payload.',
+      );
+    }
+  }
+
+  @SubscribeMessage('chat.message.send')
+  async handle_chat_message_send(
+    @ConnectedSocket() client: WebSocket,
+    @MessageBody() body: unknown,
+  ) {
+    try {
+      const state = this.get_authenticated_state(client);
+      await this.direct_message_service.handle_chat_message_send(
+        state.public_key,
+        body,
+      );
+    } catch (error) {
+      this.send_system_error(
+        client,
+        error instanceof Error
+          ? error.message
+          : 'Failed to send the direct message.',
+      );
+    }
+  }
+
+  @SubscribeMessage('chat.message.persisted')
+  async handle_chat_message_persisted(
+    @ConnectedSocket() client: WebSocket,
+    @MessageBody() body: unknown,
+  ) {
+    try {
+      const state = this.get_authenticated_state(client);
+      await this.direct_message_service.handle_chat_message_persisted(
+        state.public_key,
+        body,
+      );
+    } catch (error) {
+      this.send_system_error(
+        client,
+        error instanceof Error
+          ? error.message
+          : 'Failed to confirm local message persistence.',
+      );
+    }
+  }
+
+  @SubscribeMessage('chat.sync')
+  async handle_chat_sync(@ConnectedSocket() client: WebSocket) {
+    try {
+      const state = this.get_authenticated_state(client);
+      await this.direct_message_service.handle_chat_sync(state.public_key);
+    } catch (error) {
+      this.send_system_error(
+        client,
+        error instanceof Error ? error.message : 'Failed to sync chat queue.',
       );
     }
   }
@@ -236,6 +296,19 @@ export class RealtimeGateway
       received_at: payload.received_at.trim(),
       status: 'received',
     };
+  }
+
+  private get_authenticated_state(client: WebSocket): AuthenticatedSocketState {
+    const state =
+      this.realtime_connection_service.get_authenticated_state(client);
+
+    if (!state?.session_id || !state.public_key) {
+      this.send_system_error(client, 'Socket is not authenticated.');
+      client.close(4401, 'Socket is not authenticated');
+      throw new UnauthorizedException('Socket is not authenticated.');
+    }
+
+    return state as AuthenticatedSocketState;
   }
 
   private send_system_error(client: WebSocket, message: string) {

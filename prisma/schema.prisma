@@ -25,3 +25,20 @@ model User {
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 }
+
+model DirectMessage {
+  id                     String   @id @map("id")
+  sender_public_key      String   @map("sender_public_key")
+  sender_x25519_public_key String @map("sender_x25519_public_key")
+  recipient_public_key   String   @map("recipient_public_key")
+  message                String   @map("message")
+  message_hash           String   @map("message_hash")
+  sender_signature       String   @map("sender_signature")
+  send_time              DateTime @map("send_time")
+  algorithm              String   @map("algorithm")
+  createdAt              DateTime @default(now()) @map("created_at")
+  expiresAt              DateTime @map("expires_at")
+
+  @@index([recipient_public_key, createdAt])
+  @@index([expiresAt])
+}

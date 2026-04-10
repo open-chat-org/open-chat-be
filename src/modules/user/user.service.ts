@@ -142,6 +142,27 @@ export class UserService {
     };
   }
 
+  async get_user_public_profile(public_key: string) {
+    const user = await this.prisma_service.user.findUnique({
+      where: { public_key },
+      select: {
+        name: true,
+        public_key: true,
+        username: true,
+      },
+    });
+
+    if (!user) {
+      return {
+        name: null,
+        public_key,
+        username: null,
+      };
+    }
+
+    return user;
+  }
+
   async update_user_profile(
     public_key: string,
     update_user_profile_dto: UpdateUserProfileDto,
