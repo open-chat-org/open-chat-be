@@ -703,16 +703,18 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    const report_batches = this.create_report_batches(reports, 25);
+
     await Promise.all(
       connected_peers.map(async (peer) =>
-        this.send_server_score_reports_to_peer(peer.peer_id, reports),
+        this.send_server_score_reports_to_peer(peer.peer_id, report_batches),
       ),
     );
   }
 
   private async send_server_score_reports_to_peer(
     peer_id: string,
-    reports: ServerScoreReportPayload[],
+    report_batches: ServerScoreReportPayload[][],
   ) {
     if (this.libp2p_node == null) {
       return;
@@ -724,34 +726,95 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    try {
-      const { stream } = await this.libp2p_node.dialProtocol(
+    let sent_report_count = 0;
+
+    for (const batch of report_batches) {
+      try {
+        const stream = await this.open_peer_protocol_stream(
+          peer_connection,
+          PEER_SERVER_SCORE_GOSSIP_PROTOCOL,
+        );
+
+        await stream.sink(create_single_chunk_source(JSON.stringify(batch)));
+        sent_report_count += batch.length;
+      } catch (error) {
+        const error_message =
+          error instanceof Error ? error.message : String(error);
+        this.trace_event(
+          'p2p.score_gossip_send_failed',
+          'warn',
+          {
+            batch_size: batch.length,
+            error: error_message,
+            sent_report_count,
+            total_report_count: report_batches.reduce(
+              (count, current_batch) => count + current_batch.length,
+              0,
+            ),
+          },
+          peer_id,
+        );
+        return;
+      }
+    }
+
+    this.trace_event(
+      'p2p.score_gossip_sent',
+      'info',
+      {
+        report_count: sent_report_count,
+      },
+      peer_id,
+    );
+  }
+
+  private async open_peer_protocol_stream(
+    peer_connection: any,
+    protocol: string,
+  ) {
+    const new_stream = peer_connection?.newStream;
+
+    if (typeof new_stream === 'function') {
+      const result = await new_stream.call(peer_connection, protocol);
+
+      if (result?.sink && result?.source) {
+        return result;
+      }
+
+      if (result?.stream?.sink && result?.stream?.source) {
+        return result.stream;
+      }
+    }
+
+    if (peer_connection?.remotePeer) {
+      const result = await this.libp2p_node.dialProtocol(
         peer_connection.remotePeer,
-        PEER_SERVER_SCORE_GOSSIP_PROTOCOL,
+        protocol,
       );
 
-      await stream.sink(create_single_chunk_source(JSON.stringify(reports)));
-      this.trace_event(
-        'p2p.score_gossip_sent',
-        'info',
-        {
-          report_count: reports.length,
-        },
-        peer_id,
-      );
-    } catch (error) {
-      const error_message =
-        error instanceof Error ? error.message : String(error);
-      this.trace_event(
-        'p2p.score_gossip_send_failed',
-        'warn',
-        {
-          error: error_message,
-          report_count: reports.length,
-        },
-        peer_id,
-      );
+      if (result?.stream?.sink && result?.stream?.source) {
+        return result.stream;
+      }
     }
+
+    throw new Error('Failed to open protocol stream for connected peer.');
+  }
+
+  private create_report_batches(
+    reports: ServerScoreReportPayload[],
+    batch_size: number,
+  ) {
+    if (batch_size <= 0) {
+      return [reports];
+    }
+
+    const batches: ServerScoreReportPayload[][] = [];
+
+    for (let index = 0; index < reports.length; index += batch_size) {
+      batches.push(reports.slice(index, index + batch_size));
+    }
+
+    return batches;
   }
 
   private async handle_incoming_server_score_report(
