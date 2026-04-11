@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { NetworkTraceService } from '../network_trace/network_trace.service';
 import { PeerNetworkService } from './peer_network.service';
 
 describe('PeerNetworkService', () => {
@@ -6,7 +7,7 @@ describe('PeerNetworkService', () => {
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      providers: [PeerNetworkService],
+      providers: [NetworkTraceService, PeerNetworkService],
     }).compile();
 
     service = module.get<PeerNetworkService>(PeerNetworkService);

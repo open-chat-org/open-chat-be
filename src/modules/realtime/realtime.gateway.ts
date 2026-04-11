@@ -16,6 +16,7 @@ import { get_realtime_config } from '../../config/realtime.config';
 import WebSocket, { Server } from 'ws';
 import { randomUUID } from 'node:crypto';
 import { DirectMessageService } from '../direct_message/direct_message.service';
+import { NetworkTraceService } from '../network_trace/network_trace.service';
 import { RealtimeChallengeService } from './services/realtime_challenge.service';
 import { RealtimeConnectionService } from './services/realtime_connection.service';
 import { RealtimeDeliveryService } from './services/realtime_delivery.service';
@@ -45,6 +46,7 @@ export class RealtimeGateway
 
   constructor(
     private readonly direct_message_service: DirectMessageService,
+    private readonly network_trace_service: NetworkTraceService,
     private readonly realtime_challenge_service: RealtimeChallengeService,
     private readonly realtime_connection_service: RealtimeConnectionService,
     private readonly realtime_delivery_service: RealtimeDeliveryService,
@@ -191,11 +193,18 @@ export class RealtimeGateway
   ) {
     try {
       const state = this.get_authenticated_state(client);
+      this.trace_event('realtime.chat_message_send_received', 'info', {
+        public_key: state.public_key,
+        session_id: state.session_id,
+      }, state.session_id);
       await this.direct_message_service.handle_chat_message_send(
         state.public_key,
         body,
       );
     } catch (error) {
+      this.trace_event('realtime.chat_message_send_failed', 'warn', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       this.send_system_error(
         client,
         error instanceof Error
@@ -212,11 +221,23 @@ export class RealtimeGateway
   ) {
     try {
       const state = this.get_authenticated_state(client);
+      this.trace_event(
+        'realtime.chat_message_persisted_received',
+        'info',
+        {
+          public_key: state.public_key,
+          session_id: state.session_id,
+        },
+        state.session_id,
+      );
       await this.direct_message_service.handle_chat_message_persisted(
         state.public_key,
         body,
       );
     } catch (error) {
+      this.trace_event('realtime.chat_message_persisted_failed', 'warn', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       this.send_system_error(
         client,
         error instanceof Error
@@ -230,8 +251,20 @@ export class RealtimeGateway
   async handle_chat_sync(@ConnectedSocket() client: WebSocket) {
     try {
       const state = this.get_authenticated_state(client);
+      this.trace_event(
+        'realtime.chat_sync_received',
+        'info',
+        {
+          public_key: state.public_key,
+          session_id: state.session_id,
+        },
+        state.session_id,
+      );
       await this.direct_message_service.handle_chat_sync(state.public_key);
     } catch (error) {
+      this.trace_event('realtime.chat_sync_failed', 'warn', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       this.send_system_error(
         client,
         error instanceof Error ? error.message : 'Failed to sync chat queue.',
@@ -317,6 +350,21 @@ export class RealtimeGateway
         message,
       },
       type: 'system.error',
+    });
+  }
+
+  private trace_event(
+    event_type: string,
+    severity: 'error' | 'info' | 'warn',
+    details?: unknown,
+    session_id?: string,
+  ) {
+    this.network_trace_service.record_event({
+      details,
+      event_type,
+      session_id,
+      severity,
+      source: 'realtime',
     });
   }
 }

@@ -9,6 +9,8 @@ import {
     enabled: boolean;
     k_bucket_size: number;
     listen: string;
+    trace_buffer_size: number;
+    trace_max_payload_bytes: number;
     target_peers: number;
   };
   
@@ -42,6 +44,11 @@ import {
       listen:
         get_optional_env_string('P2P_LISTEN', '/ip4/0.0.0.0/tcp/4101') ??
         '/ip4/0.0.0.0/tcp/4101',
+      trace_buffer_size: get_optional_env_number('P2P_TRACE_BUFFER_SIZE', 5000),
+      trace_max_payload_bytes: get_optional_env_number(
+        'P2P_TRACE_MAX_PAYLOAD_BYTES',
+        2048,
+      ),
       target_peers: get_optional_env_number('P2P_TARGET_PEERS', 16),
     };
   }

@@ -9,6 +9,7 @@ import {
 import { DirectMessageModel } from '../../generated/prisma/models/DirectMessage';
 import { get_direct_message_config } from '../../config/direct_message.config';
 import { PrismaService } from '../prisma/prisma.service';
+import { NetworkTraceService } from '../network_trace/network_trace.service';
 import { RealtimeService } from '../realtime/services/realtime.service';
 import {
   ChatMessageAcceptedPayload,
@@ -27,6 +28,7 @@ export class DirectMessageService implements OnModuleInit, OnModuleDestroy {
   private cleanup_timer: NodeJS.Timeout | null = null;
 
   constructor(
+    private readonly network_trace_service: NetworkTraceService,
     private readonly prisma_service: PrismaService,
     private readonly realtime_service: RealtimeService,
   ) {}
@@ -46,16 +48,43 @@ export class DirectMessageService implements OnModuleInit, OnModuleDestroy {
 
   async handle_chat_message_send(sender_public_key: string, value: unknown) {
     const payload = parse_chat_message_send_payload(value);
+
+    this.trace_event(
+      'direct_message.chat_message_send_received',
+      'info',
+      {
+        recipient_public_key: payload.recipient_public_key,
+      },
+      payload.id,
+    );
+
     const is_valid_signature = await verify_direct_message_signature(
       sender_public_key,
       payload,
     );
 
     if (!is_valid_signature) {
+      this.trace_event(
+        'direct_message.signature_rejected',
+        'warn',
+        {
+          reason: 'Direct-message signature verification failed.',
+          sender_public_key,
+        },
+        payload.id,
+      );
       throw new UnauthorizedException(
         'Direct-message signature verification failed.',
       );
     }
+    this.trace_event(
+      'direct_message.signature_verified',
+      'info',
+      {
+        sender_public_key,
+      },
+      payload.id,
+    );
 
     const [sender, recipient] = await Promise.all([
       this.prisma_service.user.findUnique({
@@ -79,12 +108,26 @@ export class DirectMessageService implements OnModuleInit, OnModuleDestroy {
     ]);
 
     if (!sender?.x25519_public_key) {
+      this.trace_event(
+        'direct_message.sender_x25519_missing',
+        'warn',
+        undefined,
+        payload.id,
+      );
       throw new NotFoundException(
         'Sender X25519 public key is not registered on the server.',
       );
     }
 
     if (!recipient?.x25519_public_key) {
+      this.trace_event(
+        'direct_message.recipient_x25519_missing',
+        'warn',
+        {
+          recipient_public_key: payload.recipient_public_key,
+        },
+        payload.id,
+      );
       throw new NotFoundException(
         'Recipient X25519 public key is not available.',
       );
@@ -111,14 +154,39 @@ export class DirectMessageService implements OnModuleInit, OnModuleDestroy {
     const message_event = this.map_chat_message_event(queued_message);
     const accepted_event = this.map_chat_message_accepted_event(queued_message);
 
+    this.trace_event(
+      'direct_message.queue_upserted',
+      'info',
+      {
+        recipient_public_key: payload.recipient_public_key,
+      },
+      queued_message.id,
+    );
+
     await this.realtime_service.emit_to_user(payload.recipient_public_key, {
       payload: message_event,
       type: 'chat.message',
     });
+    this.trace_event(
+      'direct_message.recipient_emit_sent',
+      'info',
+      {
+        recipient_public_key: payload.recipient_public_key,
+      },
+      queued_message.id,
+    );
     await this.realtime_service.emit_to_user(sender_public_key, {
       payload: accepted_event,
       type: 'chat.message.accepted',
     });
+    this.trace_event(
+      'direct_message.sender_accepted_emit_sent',
+      'info',
+      {
+        sender_public_key,
+      },
+      queued_message.id,
+    );
 
     return accepted_event;
   }
@@ -128,6 +196,14 @@ export class DirectMessageService implements OnModuleInit, OnModuleDestroy {
     value: unknown,
   ) {
     const payload = parse_chat_message_persisted_payload(value);
+    this.trace_event(
+      'direct_message.chat_message_persisted_received',
+      'info',
+      {
+        recipient_public_key,
+      },
+      payload.message_id,
+    );
     const queued_message = await this.prisma_service.directMessage.findUnique({
       where: {
         id: payload.message_id,
@@ -139,6 +215,12 @@ export class DirectMessageService implements OnModuleInit, OnModuleDestroy {
     });
 
     if (!queued_message) {
+      this.trace_event(
+        'direct_message.queue_row_not_found',
+        'info',
+        undefined,
+        payload.message_id,
+      );
       return {
         deleted: false,
         message_id: payload.message_id,
@@ -146,6 +228,15 @@ export class DirectMessageService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (queued_message.recipient_public_key !== recipient_public_key) {
+      this.trace_event(
+        'direct_message.queue_delete_unauthorized',
+        'warn',
+        {
+          queued_recipient_public_key: queued_message.recipient_public_key,
+          recipient_public_key,
+        },
+        payload.message_id,
+      );
       throw new UnauthorizedException(
         'This message does not belong to the authenticated recipient.',
       );
@@ -156,6 +247,14 @@ export class DirectMessageService implements OnModuleInit, OnModuleDestroy {
         id: payload.message_id,
       },
     });
+    this.trace_event(
+      'direct_message.queue_row_deleted',
+      'info',
+      {
+        recipient_public_key,
+      },
+      payload.message_id,
+    );
 
     return {
       deleted: true,
@@ -164,6 +263,10 @@ export class DirectMessageService implements OnModuleInit, OnModuleDestroy {
   }
 
   async handle_chat_sync(recipient_public_key: string) {
+    this.trace_event('direct_message.chat_sync_requested', 'info', {
+      recipient_public_key,
+    });
+
     const queued_messages = await this.prisma_service.directMessage.findMany({
       where: {
         expiresAt: {
@@ -181,6 +284,14 @@ export class DirectMessageService implements OnModuleInit, OnModuleDestroy {
         payload: this.map_chat_message_event(queued_message),
         type: 'chat.message',
       });
+      this.trace_event(
+        'direct_message.sync_replay_emitted',
+        'info',
+        {
+          recipient_public_key,
+        },
+        queued_message.id,
+      );
     }
 
     return {
@@ -201,6 +312,9 @@ export class DirectMessageService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(
         `Deleted ${deleted_messages.count} expired direct-message queue rows.`,
       );
+      this.trace_event('direct_message.expired_rows_deleted', 'info', {
+        count: deleted_messages.count,
+      });
     }
   }
 
@@ -239,5 +353,20 @@ export class DirectMessageService implements OnModuleInit, OnModuleDestroy {
       recipient_public_key: direct_message.recipient_public_key,
       send_time: direct_message.send_time.toISOString(),
     };
+  }
+
+  private trace_event(
+    event_type: string,
+    severity: 'error' | 'info' | 'warn',
+    details?: unknown,
+    message_id?: string,
+  ) {
+    this.network_trace_service.record_event({
+      details,
+      event_type,
+      message_id,
+      severity,
+      source: 'direct_message',
+    });
   }
 }
