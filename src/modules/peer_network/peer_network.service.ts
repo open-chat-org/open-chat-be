@@ -338,7 +338,7 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
 
     this.libp2p_node.handle(
       PEER_HELLO_PROTOCOL,
-      async ({ connection, stream }: any) => {
+      async (stream: any, connection: any) => {
         const remote_peer_id =
           connection?.remotePeer?.toString?.() ?? 'unknown_peer';
         this.logger.log(`Received hello from peer: ${remote_peer_id}`);
@@ -366,7 +366,7 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
 
     this.libp2p_node.handle(
       PEER_SERVER_SCORE_GOSSIP_PROTOCOL,
-      async ({ connection, stream }: any) => {
+      async (stream: any, connection: any) => {
         const sender_peer_id =
           connection?.remotePeer?.toString?.() ?? 'unknown_peer';
         const payload_text = await this.read_stream_payload(stream);
