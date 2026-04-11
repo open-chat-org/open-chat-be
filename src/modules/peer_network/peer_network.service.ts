@@ -394,8 +394,8 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
           is_active: this.is_peer_directly_connected(remote_peer_id),
         });
 
-        if (stream?.sink != null) {
-          await stream.sink(create_single_chunk_source('hello-ack'));
+        if (stream != null) {
+          await this.write_stream_payload(stream, 'hello-ack');
           this.trace_event(
             'p2p.hello_ack_sent',
             'info',
@@ -498,7 +498,7 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
             this.get_local_peer_id(),
           );
 
-        await stream.sink(create_single_chunk_source(JSON.stringify(response)));
+        await this.write_stream_payload(stream, JSON.stringify(response));
       },
     );
 
@@ -525,7 +525,7 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
         const response =
           await this.table_sync_runner_service.handle_fetch_request(payload);
 
-        await stream.sink(create_single_chunk_source(JSON.stringify(response)));
+        await this.write_stream_payload(stream, JSON.stringify(response));
       },
     );
 
@@ -552,7 +552,7 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
         const response =
           await this.table_sync_runner_service.handle_verify_request(payload);
 
-        await stream.sink(create_single_chunk_source(JSON.stringify(response)));
+        await this.write_stream_payload(stream, JSON.stringify(response));
       },
     );
 
@@ -581,7 +581,7 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
             payload,
           );
 
-        await stream.sink(create_single_chunk_source(JSON.stringify(response)));
+        await this.write_stream_payload(stream, JSON.stringify(response));
       },
     );
 
@@ -646,14 +646,13 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
         );
 
         if (!this.dm_delete_gossip_service.can_forward(event)) {
-          await stream.sink(
-            create_single_chunk_source(
-              JSON.stringify({
-                event_id: event.event_id,
-                status: 'ok',
-                type: 'dm.delete.gossip.ack',
-              }),
-            ),
+          await this.write_stream_payload(
+            stream,
+            JSON.stringify({
+              event_id: event.event_id,
+              status: 'ok',
+              type: 'dm.delete.gossip.ack',
+            }),
           );
           return;
         }
@@ -662,14 +661,13 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
           this.dm_delete_gossip_service.create_forwarded_event(event),
           sender_peer_id,
         );
-        await stream.sink(
-          create_single_chunk_source(
-            JSON.stringify({
-              event_id: event.event_id,
-              status: 'ok',
-              type: 'dm.delete.gossip.ack',
-            }),
-          ),
+        await this.write_stream_payload(
+          stream,
+          JSON.stringify({
+            event_id: event.event_id,
+            status: 'ok',
+            type: 'dm.delete.gossip.ack',
+          }),
         );
       },
     );
@@ -984,7 +982,7 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
           PEER_SERVER_SCORE_GOSSIP_PROTOCOL,
         );
 
-        await stream.sink(create_single_chunk_source(JSON.stringify(batch)));
+        await this.write_stream_payload(stream, JSON.stringify(batch));
         sent_report_count += batch.length;
       } catch (error) {
         const error_message =
@@ -1099,6 +1097,22 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
       return result.stream;
     }
 
+    if (
+      result?.send &&
+      typeof result.send === 'function' &&
+      typeof result[Symbol.asyncIterator] === 'function'
+    ) {
+      return result;
+    }
+
+    if (
+      result?.stream?.send &&
+      typeof result.stream.send === 'function' &&
+      typeof result.stream[Symbol.asyncIterator] === 'function'
+    ) {
+      return result.stream;
+    }
+
     return null;
   }
 
@@ -1164,7 +1178,7 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
       protocol,
     );
 
-    await stream.sink(create_single_chunk_source(JSON.stringify(payload)));
+    await this.write_stream_payload(stream, JSON.stringify(payload));
 
     const response_text = await this.read_stream_payload(stream);
     const parsed_payload = this.parse_json(response_text);
@@ -1201,7 +1215,7 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
             peer_connection,
             PEER_DM_DELETE_GOSSIP_PROTOCOL,
           );
-          await stream.sink(create_single_chunk_source(JSON.stringify(event)));
+          await this.write_stream_payload(stream, JSON.stringify(event));
           this.trace_event(
             'p2p.dm_delete_gossip_sent',
             'info',
@@ -2052,15 +2066,45 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
     return Math.max(15, Math.min(86_400, Math.trunc(max_report_age_seconds)));
   }
 
+  private async write_stream_payload(stream: any, payload: string) {
+    const encoded_payload = new TextEncoder().encode(payload);
+
+    if (stream?.sink) {
+      await stream.sink(create_single_chunk_source(payload));
+      return;
+    }
+
+    if (typeof stream?.send === 'function') {
+      const can_continue = stream.send(encoded_payload);
+
+      if (can_continue === false && typeof stream?.onDrain === 'function') {
+        await stream.onDrain();
+      }
+
+      await stream.close?.();
+      return;
+    }
+
+    throw new Error('Unsupported stream shape for write.');
+  }
+
   private async read_stream_payload(stream: any) {
-    if (!stream?.source) {
+    if (stream == null) {
       return '';
     }
 
     const chunks: Uint8Array[] = [];
 
-    for await (const chunk of stream.source as AsyncIterable<StreamChunk>) {
-      chunks.push(normalize_chunk(chunk));
+    if (stream?.source) {
+      for await (const chunk of stream.source as AsyncIterable<StreamChunk>) {
+        chunks.push(normalize_chunk(chunk));
+      }
+    } else if (typeof stream?.[Symbol.asyncIterator] === 'function') {
+      for await (const chunk of stream as AsyncIterable<StreamChunk>) {
+        chunks.push(normalize_chunk(chunk));
+      }
+    } else {
+      return '';
     }
 
     if (chunks.length === 0) {
