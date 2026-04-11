@@ -49,3 +49,18 @@ export type User = Prisma.UserModel
  * 
  */
 export type DirectMessage = Prisma.DirectMessageModel
+/**
+ * Model ServerNode
+ * 
+ */
+export type ServerNode = Prisma.ServerNodeModel
+/**
+ * Model ServerScoreReport
+ * 
+ */
+export type ServerScoreReport = Prisma.ServerScoreReportModel
+/**
+ * Model ServerScoreAggregate
+ * 
+ */
+export type ServerScoreAggregate = Prisma.ServerScoreAggregateModel

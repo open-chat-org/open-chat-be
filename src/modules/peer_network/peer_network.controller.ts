@@ -1,11 +1,4 @@
-import {
-  Controller,
-  Get,
-  Header,
-  Query,
-  Req,
-  Res,
-} from '@nestjs/common';
+import { Controller, Get, Header, Query, Req, Res } from '@nestjs/common';
 import { NetworkTraceService } from '../network_trace/network_trace.service';
 import { create_p2p_graph_html } from './peer_network_graph.template';
 import { PeerNetworkService } from './peer_network.service';
@@ -29,6 +22,27 @@ export class PeerNetworkController {
   @Get('topology')
   get_topology() {
     return this.peer_network_service.get_topology();
+  }
+
+  @Get('candidates')
+  async get_candidates(
+    @Query('limit') limit?: string,
+    @Query('max_report_age_sec') max_report_age_sec?: string,
+  ) {
+    const parsed_limit =
+      typeof limit === 'string' && Number.isFinite(Number(limit))
+        ? Number(limit)
+        : undefined;
+    const parsed_max_report_age_sec =
+      typeof max_report_age_sec === 'string' &&
+      Number.isFinite(Number(max_report_age_sec))
+        ? Number(max_report_age_sec)
+        : undefined;
+
+    return this.peer_network_service.get_candidates(
+      parsed_limit,
+      parsed_max_report_age_sec,
+    );
   }
 
   @Get('trace')
@@ -117,4 +131,3 @@ export class PeerNetworkController {
     return undefined;
   }
 }
-

@@ -52,7 +52,10 @@ export const AnyNull = runtime.AnyNull
 
 export const ModelName = {
   User: 'User',
-  DirectMessage: 'DirectMessage'
+  DirectMessage: 'DirectMessage',
+  ServerNode: 'ServerNode',
+  ServerScoreReport: 'ServerScoreReport',
+  ServerScoreAggregate: 'ServerScoreAggregate'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -104,12 +107,62 @@ export const DirectMessageScalarFieldEnum = {
 export type DirectMessageScalarFieldEnum = (typeof DirectMessageScalarFieldEnum)[keyof typeof DirectMessageScalarFieldEnum]
 
 
+export const ServerNodeScalarFieldEnum = {
+  peer_id: 'peer_id',
+  server_public_key: 'server_public_key',
+  listen_addresses: 'listen_addresses',
+  last_seen_at: 'last_seen_at',
+  last_announce_at: 'last_announce_at',
+  is_active: 'is_active',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type ServerNodeScalarFieldEnum = (typeof ServerNodeScalarFieldEnum)[keyof typeof ServerNodeScalarFieldEnum]
+
+
+export const ServerScoreReportScalarFieldEnum = {
+  id: 'id',
+  reporter_peer_id: 'reporter_peer_id',
+  reporter_server_public_key: 'reporter_server_public_key',
+  target_peer_id: 'target_peer_id',
+  score: 'score',
+  observed_at: 'observed_at',
+  expires_at: 'expires_at',
+  payload_hash: 'payload_hash',
+  signature: 'signature',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type ServerScoreReportScalarFieldEnum = (typeof ServerScoreReportScalarFieldEnum)[keyof typeof ServerScoreReportScalarFieldEnum]
+
+
+export const ServerScoreAggregateScalarFieldEnum = {
+  target_peer_id: 'target_peer_id',
+  mean_score: 'mean_score',
+  report_count: 'report_count',
+  updated_at: 'updated_at',
+  last_report_at: 'last_report_at'
+} as const
+
+export type ServerScoreAggregateScalarFieldEnum = (typeof ServerScoreAggregateScalarFieldEnum)[keyof typeof ServerScoreAggregateScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
 } as const
 
 export type SortOrder = (typeof SortOrder)[keyof typeof SortOrder]
+
+
+export const NullableJsonNullValueInput = {
+  DbNull: DbNull,
+  JsonNull: JsonNull
+} as const
+
+export type NullableJsonNullValueInput = (typeof NullableJsonNullValueInput)[keyof typeof NullableJsonNullValueInput]
 
 
 export const QueryMode = {
@@ -126,4 +179,13 @@ export const NullsOrder = {
 } as const
 
 export type NullsOrder = (typeof NullsOrder)[keyof typeof NullsOrder]
+
+
+export const JsonNullValueFilter = {
+  DbNull: DbNull,
+  JsonNull: JsonNull,
+  AnyNull: AnyNull
+} as const
+
+export type JsonNullValueFilter = (typeof JsonNullValueFilter)[keyof typeof JsonNullValueFilter]
 

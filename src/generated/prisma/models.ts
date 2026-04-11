@@ -10,4 +10,7 @@
  */
 export type * from './models/User.js'
 export type * from './models/DirectMessage.js'
+export type * from './models/ServerNode.js'
+export type * from './models/ServerScoreReport.js'
+export type * from './models/ServerScoreAggregate.js'
 export type * from './commonInputTypes.js'

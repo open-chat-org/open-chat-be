@@ -385,7 +385,10 @@ type FieldRefInputType<Model, FieldType> = Model extends never ? never : FieldRe
 
 export const ModelName = {
   User: 'User',
-  DirectMessage: 'DirectMessage'
+  DirectMessage: 'DirectMessage',
+  ServerNode: 'ServerNode',
+  ServerScoreReport: 'ServerScoreReport',
+  ServerScoreAggregate: 'ServerScoreAggregate'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -401,7 +404,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "user" | "directMessage"
+    modelProps: "user" | "directMessage" | "serverNode" | "serverScoreReport" | "serverScoreAggregate"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -553,6 +556,228 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    ServerNode: {
+      payload: Prisma.$ServerNodePayload<ExtArgs>
+      fields: Prisma.ServerNodeFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.ServerNodeFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerNodePayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.ServerNodeFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerNodePayload>
+        }
+        findFirst: {
+          args: Prisma.ServerNodeFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerNodePayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.ServerNodeFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerNodePayload>
+        }
+        findMany: {
+          args: Prisma.ServerNodeFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerNodePayload>[]
+        }
+        create: {
+          args: Prisma.ServerNodeCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerNodePayload>
+        }
+        createMany: {
+          args: Prisma.ServerNodeCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.ServerNodeCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerNodePayload>[]
+        }
+        delete: {
+          args: Prisma.ServerNodeDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerNodePayload>
+        }
+        update: {
+          args: Prisma.ServerNodeUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerNodePayload>
+        }
+        deleteMany: {
+          args: Prisma.ServerNodeDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.ServerNodeUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.ServerNodeUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerNodePayload>[]
+        }
+        upsert: {
+          args: Prisma.ServerNodeUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerNodePayload>
+        }
+        aggregate: {
+          args: Prisma.ServerNodeAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateServerNode>
+        }
+        groupBy: {
+          args: Prisma.ServerNodeGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.ServerNodeGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.ServerNodeCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.ServerNodeCountAggregateOutputType> | number
+        }
+      }
+    }
+    ServerScoreReport: {
+      payload: Prisma.$ServerScoreReportPayload<ExtArgs>
+      fields: Prisma.ServerScoreReportFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.ServerScoreReportFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreReportPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.ServerScoreReportFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreReportPayload>
+        }
+        findFirst: {
+          args: Prisma.ServerScoreReportFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreReportPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.ServerScoreReportFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreReportPayload>
+        }
+        findMany: {
+          args: Prisma.ServerScoreReportFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreReportPayload>[]
+        }
+        create: {
+          args: Prisma.ServerScoreReportCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreReportPayload>
+        }
+        createMany: {
+          args: Prisma.ServerScoreReportCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.ServerScoreReportCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreReportPayload>[]
+        }
+        delete: {
+          args: Prisma.ServerScoreReportDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreReportPayload>
+        }
+        update: {
+          args: Prisma.ServerScoreReportUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreReportPayload>
+        }
+        deleteMany: {
+          args: Prisma.ServerScoreReportDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.ServerScoreReportUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.ServerScoreReportUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreReportPayload>[]
+        }
+        upsert: {
+          args: Prisma.ServerScoreReportUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreReportPayload>
+        }
+        aggregate: {
+          args: Prisma.ServerScoreReportAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateServerScoreReport>
+        }
+        groupBy: {
+          args: Prisma.ServerScoreReportGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.ServerScoreReportGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.ServerScoreReportCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.ServerScoreReportCountAggregateOutputType> | number
+        }
+      }
+    }
+    ServerScoreAggregate: {
+      payload: Prisma.$ServerScoreAggregatePayload<ExtArgs>
+      fields: Prisma.ServerScoreAggregateFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.ServerScoreAggregateFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreAggregatePayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.ServerScoreAggregateFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreAggregatePayload>
+        }
+        findFirst: {
+          args: Prisma.ServerScoreAggregateFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreAggregatePayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.ServerScoreAggregateFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreAggregatePayload>
+        }
+        findMany: {
+          args: Prisma.ServerScoreAggregateFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreAggregatePayload>[]
+        }
+        create: {
+          args: Prisma.ServerScoreAggregateCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreAggregatePayload>
+        }
+        createMany: {
+          args: Prisma.ServerScoreAggregateCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.ServerScoreAggregateCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreAggregatePayload>[]
+        }
+        delete: {
+          args: Prisma.ServerScoreAggregateDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreAggregatePayload>
+        }
+        update: {
+          args: Prisma.ServerScoreAggregateUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreAggregatePayload>
+        }
+        deleteMany: {
+          args: Prisma.ServerScoreAggregateDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.ServerScoreAggregateUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.ServerScoreAggregateUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreAggregatePayload>[]
+        }
+        upsert: {
+          args: Prisma.ServerScoreAggregateUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ServerScoreAggregatePayload>
+        }
+        aggregate: {
+          args: Prisma.ServerScoreAggregateAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateServerScoreAggregate>
+        }
+        groupBy: {
+          args: Prisma.ServerScoreAggregateGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.ServerScoreAggregateGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.ServerScoreAggregateCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.ServerScoreAggregateCountAggregateOutputType> | number
+        }
+      }
+    }
   }
 } & {
   other: {
@@ -625,12 +850,62 @@ export const DirectMessageScalarFieldEnum = {
 export type DirectMessageScalarFieldEnum = (typeof DirectMessageScalarFieldEnum)[keyof typeof DirectMessageScalarFieldEnum]
 
 
+export const ServerNodeScalarFieldEnum = {
+  peer_id: 'peer_id',
+  server_public_key: 'server_public_key',
+  listen_addresses: 'listen_addresses',
+  last_seen_at: 'last_seen_at',
+  last_announce_at: 'last_announce_at',
+  is_active: 'is_active',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type ServerNodeScalarFieldEnum = (typeof ServerNodeScalarFieldEnum)[keyof typeof ServerNodeScalarFieldEnum]
+
+
+export const ServerScoreReportScalarFieldEnum = {
+  id: 'id',
+  reporter_peer_id: 'reporter_peer_id',
+  reporter_server_public_key: 'reporter_server_public_key',
+  target_peer_id: 'target_peer_id',
+  score: 'score',
+  observed_at: 'observed_at',
+  expires_at: 'expires_at',
+  payload_hash: 'payload_hash',
+  signature: 'signature',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type ServerScoreReportScalarFieldEnum = (typeof ServerScoreReportScalarFieldEnum)[keyof typeof ServerScoreReportScalarFieldEnum]
+
+
+export const ServerScoreAggregateScalarFieldEnum = {
+  target_peer_id: 'target_peer_id',
+  mean_score: 'mean_score',
+  report_count: 'report_count',
+  updated_at: 'updated_at',
+  last_report_at: 'last_report_at'
+} as const
+
+export type ServerScoreAggregateScalarFieldEnum = (typeof ServerScoreAggregateScalarFieldEnum)[keyof typeof ServerScoreAggregateScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
 } as const
 
 export type SortOrder = (typeof SortOrder)[keyof typeof SortOrder]
+
+
+export const NullableJsonNullValueInput = {
+  DbNull: DbNull,
+  JsonNull: JsonNull
+} as const
+
+export type NullableJsonNullValueInput = (typeof NullableJsonNullValueInput)[keyof typeof NullableJsonNullValueInput]
 
 
 export const QueryMode = {
@@ -647,6 +922,15 @@ export const NullsOrder = {
 } as const
 
 export type NullsOrder = (typeof NullsOrder)[keyof typeof NullsOrder]
+
+
+export const JsonNullValueFilter = {
+  DbNull: DbNull,
+  JsonNull: JsonNull,
+  AnyNull: AnyNull
+} as const
+
+export type JsonNullValueFilter = (typeof JsonNullValueFilter)[keyof typeof JsonNullValueFilter]
 
 
 
@@ -684,6 +968,27 @@ export type ListDateTimeFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaM
 
 
 /**
+ * Reference to a field of type 'Json'
+ */
+export type JsonFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'Json'>
+    
+
+
+/**
+ * Reference to a field of type 'QueryMode'
+ */
+export type EnumQueryModeFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'QueryMode'>
+    
+
+
+/**
+ * Reference to a field of type 'Boolean'
+ */
+export type BooleanFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'Boolean'>
+    
+
+
+/**
  * Reference to a field of type 'Int'
  */
 export type IntFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'Int'>
@@ -694,6 +999,20 @@ export type IntFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'In
  * Reference to a field of type 'Int[]'
  */
 export type ListIntFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'Int[]'>
+    
+
+
+/**
+ * Reference to a field of type 'Float'
+ */
+export type FloatFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'Float'>
+    
+
+
+/**
+ * Reference to a field of type 'Float[]'
+ */
+export type ListFloatFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'Float[]'>
     
 
 /**
@@ -793,6 +1112,9 @@ export type PrismaClientOptions = ({
 export type GlobalOmitConfig = {
   user?: Prisma.UserOmit
   directMessage?: Prisma.DirectMessageOmit
+  serverNode?: Prisma.ServerNodeOmit
+  serverScoreReport?: Prisma.ServerScoreReportOmit
+  serverScoreAggregate?: Prisma.ServerScoreAggregateOmit
 }
 
 /* Types for Logging */
