@@ -704,17 +704,15 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
     }
 
     await Promise.all(
-      connected_peers.map(async (peer) => {
-        for (const report of reports) {
-          await this.send_server_score_report_to_peer(peer.peer_id, report);
-        }
-      }),
+      connected_peers.map(async (peer) =>
+        this.send_server_score_reports_to_peer(peer.peer_id, reports),
+      ),
     );
   }
 
-  private async send_server_score_report_to_peer(
+  private async send_server_score_reports_to_peer(
     peer_id: string,
-    report: ServerScoreReportPayload,
+    reports: ServerScoreReportPayload[],
   ) {
     if (this.libp2p_node == null) {
       return;
@@ -732,14 +730,12 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
         PEER_SERVER_SCORE_GOSSIP_PROTOCOL,
       );
 
-      await stream.sink(create_single_chunk_source(JSON.stringify(report)));
+      await stream.sink(create_single_chunk_source(JSON.stringify(reports)));
       this.trace_event(
         'p2p.score_gossip_sent',
         'info',
         {
-          reporter_peer_id: report.reporter_peer_id,
-          score: report.score,
-          target_peer_id: report.target_peer_id,
+          report_count: reports.length,
         },
         peer_id,
       );
@@ -751,8 +747,7 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
         'warn',
         {
           error: error_message,
-          reporter_peer_id: report.reporter_peer_id,
-          target_peer_id: report.target_peer_id,
+          report_count: reports.length,
         },
         peer_id,
       );
