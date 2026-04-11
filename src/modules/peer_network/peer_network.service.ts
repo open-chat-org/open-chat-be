@@ -1021,32 +1021,85 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
     peer_connection: any,
     protocol: string,
   ) {
+    const errors: string[] = [];
     const new_stream = peer_connection?.newStream;
+    const remote_peer = peer_connection?.remotePeer;
 
     if (typeof new_stream === 'function') {
-      const result = await new_stream.call(peer_connection, protocol);
+      try {
+        const result = await new_stream.call(peer_connection, [protocol]);
+        const stream = this.extract_protocol_stream(result);
 
-      if (result?.sink && result?.source) {
-        return result;
-      }
+        if (stream) {
+          return stream;
+        }
 
-      if (result?.stream?.sink && result?.stream?.source) {
-        return result.stream;
-      }
-    }
-
-    if (peer_connection?.remotePeer) {
-      const result = await this.libp2p_node.dialProtocol(
-        peer_connection.remotePeer,
-        protocol,
-      );
-
-      if (result?.stream?.sink && result?.stream?.source) {
-        return result.stream;
+        errors.push('connection.newStream returned unsupported stream shape');
+      } catch (error) {
+        errors.push(
+          `connection.newStream failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
       }
     }
 
-    throw new Error('Failed to open protocol stream for connected peer.');
+    if (remote_peer) {
+      try {
+        const result = await this.libp2p_node.dialProtocol(remote_peer, [
+          protocol,
+        ]);
+        const stream = this.extract_protocol_stream(result);
+
+        if (stream) {
+          return stream;
+        }
+
+        errors.push('libp2p.dialProtocol returned unsupported stream shape');
+      } catch (error) {
+        errors.push(
+          `libp2p.dialProtocol failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+
+      try {
+        const refreshed_connection = await this.libp2p_node.dial(remote_peer);
+        const result = await refreshed_connection.newStream([protocol]);
+        const stream = this.extract_protocol_stream(result);
+
+        if (stream) {
+          return stream;
+        }
+
+        errors.push(
+          'libp2p.dial + connection.newStream returned unsupported stream shape',
+        );
+      } catch (error) {
+        errors.push(
+          `libp2p.dial + connection.newStream failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
+    throw new Error(
+      `Failed to open protocol stream for connected peer. Attempts: ${errors.join(' | ')}`,
+    );
+  }
+
+  private extract_protocol_stream(result: any) {
+    if (result?.sink && result?.source) {
+      return result;
+    }
+
+    if (result?.stream?.sink && result?.stream?.source) {
+      return result.stream;
+    }
+
+    return null;
   }
 
   private build_sync_runtime() {

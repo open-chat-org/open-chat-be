@@ -108,6 +108,12 @@ export class StartupSyncService implements OnModuleInit, OnModuleDestroy {
           this.queued_run_requested = false;
           await this.execute_sync('peer_reconnect', runtime);
         }
+      } catch (error) {
+        this.logger.warn(
+          `[SYNC] run failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
       } finally {
         this.is_sync_running = false;
       }
@@ -167,11 +173,21 @@ export class StartupSyncService implements OnModuleInit, OnModuleDestroy {
       },
     );
 
-    const manifest = await this.fetch_manifest_from_source(
+    const manifest_result = await this.pick_manifest_source_validator({
       run_id,
-      source_validator.peer_id,
       runtime,
-    );
+      validators,
+    });
+
+    if (!manifest_result) {
+      this.sync_progress_logger_service.end_run(run_id, 'FAILED', {
+        reason: 'No validator responded to sync manifest request.',
+      });
+      return;
+    }
+
+    const manifest = manifest_result.manifest;
+    const effective_source_validator = manifest_result.validator;
     let partial_failure = false;
 
     for (
@@ -186,7 +202,7 @@ export class StartupSyncService implements OnModuleInit, OnModuleDestroy {
       const table_sync_promise = this.sync_table({
         run_id,
         runtime,
-        source_validator,
+        source_validator: effective_source_validator,
         table,
         table_total_count,
         validators,
@@ -240,6 +256,33 @@ export class StartupSyncService implements OnModuleInit, OnModuleDestroy {
     }
 
     return response;
+  }
+
+  private async pick_manifest_source_validator(input: {
+    run_id: string;
+    runtime: StartupSyncRuntime;
+    validators: SyncValidator[];
+  }) {
+    for (const validator of input.validators) {
+      try {
+        const manifest = await this.fetch_manifest_from_source(
+          input.run_id,
+          validator.peer_id,
+          input.runtime,
+        );
+
+        if (manifest) {
+          return {
+            manifest,
+            validator,
+          };
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return null;
   }
 
   private async sync_table(input: {
