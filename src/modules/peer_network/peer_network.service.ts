@@ -67,10 +67,12 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
 
         for (const addr of config.bootstrap) {
             try {
-              await this.libp2p_node.dial(multiaddr(addr));
-              this.logger.log(`Dialed bootstrap peer: ${addr}`);
-            } catch {
-              this.logger.warn(`Bootstrap dial failed: ${addr}`);
+              const normalized_addr = this.normalize_bootstrap_address(addr);
+              await this.libp2p_node.dial(multiaddr(normalized_addr));
+              this.logger.log(`Dialed bootstrap peer: ${normalized_addr}`);
+            } catch (error) {
+              const error_message = error instanceof Error ? error.message : String(error);
+              this.logger.warn(`Bootstrap dial failed: ${addr} (${error_message})`);
             }
           }
 
@@ -127,11 +129,32 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
         const addresses =
             this.libp2p_node
                 .getMultiaddrs?.()
-                ?.map((address: any) => `${address.toString()}/p2p/${peer_id}`) ?? [];
+                ?.map((address: any) => {
+                    const address_text = address.toString();
+                    const peer_suffix = `/p2p/${peer_id}`;
+                    return address_text.endsWith(peer_suffix)
+                        ? address_text
+                        : `${address_text}${peer_suffix}`;
+                }) ?? [];
 
         this.logger.log(`P2P node identity: ${peer_id}`);
         for (const address of addresses) {
             this.logger.log(`P2P listen address: ${address}`);
         }
+    }
+
+    private normalize_bootstrap_address(address: string): string {
+        let normalized_address = address.trim();
+        if (!normalized_address.startsWith('/')) {
+            normalized_address = `/${normalized_address}`;
+        }
+
+        // If someone accidentally pastes ".../p2p/<id>/p2p/<id>", collapse it.
+        normalized_address = normalized_address.replace(
+            /\/p2p\/([^/]+)\/p2p\/\1$/,
+            '/p2p/$1',
+        );
+
+        return normalized_address;
     }
 }
