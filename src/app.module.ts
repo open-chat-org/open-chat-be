@@ -5,9 +5,10 @@ import { PrismaModule } from './modules/prisma/prisma.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { ServerIdentityModule } from './modules/server_identity/server_identity.module';
 import { UserModule } from './modules/user/user.module';
+import { PeerNetworkModule } from './modules/peer_network/peer_network.module';
 
 @Module({
-  imports: [PrismaModule, ServerIdentityModule, UserModule, RealtimeModule],
+  imports: [PrismaModule, ServerIdentityModule, UserModule, RealtimeModule, PeerNetworkModule],
   controllers: [AppController],
   providers: [AppService],
 })
