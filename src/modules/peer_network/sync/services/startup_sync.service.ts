@@ -45,6 +45,17 @@ type StartupSyncRuntime = {
   ) => Promise<unknown>;
 };
 
+type ManifestPickResult =
+  | {
+      manifest: SyncManifestResponse;
+      validator: SyncValidator;
+    }
+  | {
+      errors: string[];
+      manifest: null;
+      validator: null;
+    };
+
 @Injectable()
 export class StartupSyncService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(StartupSyncService.name);
@@ -179,8 +190,9 @@ export class StartupSyncService implements OnModuleInit, OnModuleDestroy {
       validators,
     });
 
-    if (!manifest_result) {
+    if (!manifest_result.manifest || !manifest_result.validator) {
       this.sync_progress_logger_service.end_run(run_id, 'FAILED', {
+        errors: manifest_result.errors,
         reason: 'No validator responded to sync manifest request.',
       });
       return;
@@ -262,27 +274,45 @@ export class StartupSyncService implements OnModuleInit, OnModuleDestroy {
     run_id: string;
     runtime: StartupSyncRuntime;
     validators: SyncValidator[];
-  }) {
-    for (const validator of input.validators) {
-      try {
-        const manifest = await this.fetch_manifest_from_source(
-          input.run_id,
-          validator.peer_id,
-          input.runtime,
-        );
+  }): Promise<ManifestPickResult> {
+    const errors: string[] = [];
 
-        if (manifest) {
-          return {
-            manifest,
-            validator,
-          };
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      for (const validator of input.validators) {
+        try {
+          const manifest = await this.fetch_manifest_from_source(
+            input.run_id,
+            validator.peer_id,
+            input.runtime,
+          );
+
+          if (manifest) {
+            return {
+              manifest,
+              validator,
+            };
+          }
+
+          errors.push(
+            `validator=${validator.peer_id} attempt=${attempt} invalid_manifest_response`,
+          );
+        } catch (error) {
+          errors.push(
+            `validator=${validator.peer_id} attempt=${attempt} error=${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
         }
-      } catch {
-        continue;
       }
+
+      await this.sleep(300 * attempt);
     }
 
-    return null;
+    return {
+      errors,
+      manifest: null,
+      validator: null,
+    };
   }
 
   private async sync_table(input: {
@@ -565,6 +595,12 @@ export class StartupSyncService implements OnModuleInit, OnModuleDestroy {
           clearTimeout(timer);
           reject(error);
         });
+    });
+  }
+
+  private sleep(ms: number) {
+    return new Promise<void>((resolve) => {
+      setTimeout(resolve, ms);
     });
   }
 

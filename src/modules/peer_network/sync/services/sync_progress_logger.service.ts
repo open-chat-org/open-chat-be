@@ -83,8 +83,13 @@ export class SyncProgressLoggerService {
     const summary = this.run_summaries.get(run_id);
     const elapsed_ms = summary ? Date.now() - summary.started_at_ms : undefined;
 
+    const details_text =
+      details && Object.keys(details).length > 0
+        ? ` details=${JSON.stringify(details)}`
+        : '';
+
     this.logger.log(
-      `[SYNC][${run_id}] RUN ${status} elapsed=${elapsed_ms ?? 'n/a'}ms`,
+      `[SYNC][${run_id}] RUN ${status} elapsed=${elapsed_ms ?? 'n/a'}ms${details_text}`,
     );
     this.network_trace_service.record_event({
       details: {
