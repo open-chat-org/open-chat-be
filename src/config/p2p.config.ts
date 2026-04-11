@@ -6,6 +6,13 @@ export type P2pConfig = {
   enabled: boolean;
   k_bucket_size: number;
   listen: string;
+  sync_batch_size: number;
+  sync_dedupe_ttl_seconds: number;
+  sync_enabled: boolean;
+  sync_reverify_interval_ms: number;
+  sync_startup_timeout_ms: number;
+  sync_table_timeout_ms: number;
+  sync_validator_target: number;
   score_default_max_report_age_seconds: number;
   score_gossip_interval_ms: number;
   score_report_ttl_seconds: number;
@@ -44,6 +51,31 @@ export function get_p2p_config(): P2pConfig {
     listen:
       get_optional_env_string('P2P_LISTEN', '/ip4/0.0.0.0/tcp/4101') ??
       '/ip4/0.0.0.0/tcp/4101',
+    sync_batch_size: get_optional_env_number('P2P_SYNC_BATCH_SIZE', 100),
+    sync_dedupe_ttl_seconds: get_optional_env_number(
+      'P2P_SYNC_DEDUPE_TTL_SECONDS',
+      600,
+    ),
+    sync_enabled: parse_boolean(
+      get_optional_env_string('P2P_SYNC_ENABLED'),
+      true,
+    ),
+    sync_reverify_interval_ms: get_optional_env_number(
+      'P2P_SYNC_REVERIFY_INTERVAL_MS',
+      60_000,
+    ),
+    sync_startup_timeout_ms: get_optional_env_number(
+      'P2P_SYNC_STARTUP_TIMEOUT_MS',
+      30_000,
+    ),
+    sync_table_timeout_ms: get_optional_env_number(
+      'P2P_SYNC_TABLE_TIMEOUT_MS',
+      12_000,
+    ),
+    sync_validator_target: get_optional_env_number(
+      'P2P_SYNC_VALIDATOR_TARGET',
+      5,
+    ),
     score_default_max_report_age_seconds: get_optional_env_number(
       'P2P_SCORE_DEFAULT_MAX_REPORT_AGE_SECONDS',
       180,

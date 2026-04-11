@@ -10,6 +10,7 @@ import { DirectMessageModel } from '../../generated/prisma/models/DirectMessage'
 import { get_direct_message_config } from '../../config/direct_message.config';
 import { PrismaService } from '../prisma/prisma.service';
 import { NetworkTraceService } from '../network_trace/network_trace.service';
+import { PeerNetworkService } from '../peer_network/peer_network.service';
 import { RealtimeService } from '../realtime/services/realtime.service';
 import {
   ChatMessageAcceptedPayload,
@@ -29,6 +30,7 @@ export class DirectMessageService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly network_trace_service: NetworkTraceService,
+    private readonly peer_network_service: PeerNetworkService,
     private readonly prisma_service: PrismaService,
     private readonly realtime_service: RealtimeService,
   ) {}
@@ -247,6 +249,10 @@ export class DirectMessageService implements OnModuleInit, OnModuleDestroy {
         id: payload.message_id,
       },
     });
+    await this.peer_network_service.publish_dm_delete_gossip(
+      payload.message_id,
+      recipient_public_key,
+    );
     this.trace_event(
       'direct_message.queue_row_deleted',
       'info',
@@ -300,13 +306,15 @@ export class DirectMessageService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async delete_expired_messages() {
-    const deleted_messages = await this.prisma_service.directMessage.deleteMany({
-      where: {
-        expiresAt: {
-          lte: new Date(),
+    const deleted_messages = await this.prisma_service.directMessage.deleteMany(
+      {
+        where: {
+          expiresAt: {
+            lte: new Date(),
+          },
         },
       },
-    });
+    );
 
     if (deleted_messages.count > 0) {
       this.logger.log(

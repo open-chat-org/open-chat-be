@@ -127,8 +127,16 @@ export function create_p2p_graph_html() {
     .right-side {
       display: grid;
       gap: 14px;
-      grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
       min-height: 0;
+    }
+
+    .timeline-panel {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      height: 420px;
+      min-height: 420px;
+      max-height: 420px;
     }
 
     .filters {
@@ -158,8 +166,9 @@ export function create_p2p_graph_html() {
     .timeline {
       list-style: none;
       margin: 0;
-      max-height: calc(100% - 56px);
-      overflow: auto;
+      min-height: 0;
+      overflow-x: hidden;
+      overflow-y: auto;
       padding: 10px;
     }
 
@@ -226,8 +235,14 @@ export function create_p2p_graph_html() {
       color: var(--error);
     }
 
+    .flow-panel {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      min-height: 0;
+    }
+
     .flow-content {
-      max-height: calc(100% - 48px);
+      min-height: 0;
       overflow: auto;
       padding: 12px 14px;
     }
@@ -273,6 +288,12 @@ export function create_p2p_graph_html() {
         grid-template-columns: 1fr;
         grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
       }
+
+      .timeline-panel {
+        height: 360px;
+        min-height: 360px;
+        max-height: 360px;
+      }
     }
   </style>
 </head>
@@ -298,7 +319,7 @@ export function create_p2p_graph_html() {
     </section>
 
     <section class="right-side">
-      <article class="panel">
+      <article class="panel timeline-panel">
         <header class="panel-header">
           <div>
             <h2 class="panel-title">Event Timeline</h2>
@@ -313,7 +334,7 @@ export function create_p2p_graph_html() {
         <ul class="timeline" id="timeline_list"></ul>
       </article>
 
-      <article class="panel">
+      <article class="panel flow-panel">
         <header class="panel-header">
           <div>
             <h2 class="panel-title">Message Flow</h2>
@@ -724,4 +745,3 @@ export function create_p2p_graph_html() {
 </body>
 </html>`;
 }
-

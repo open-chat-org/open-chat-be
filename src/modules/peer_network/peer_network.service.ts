@@ -10,6 +10,11 @@ import { get_p2p_config } from '../../config/p2p.config';
 import { NetworkTraceService } from '../network_trace/network_trace.service';
 import {
   PEER_HELLO_PROTOCOL,
+  PEER_DB_SYNC_FETCH_BY_KEYS_PROTOCOL,
+  PEER_DB_SYNC_FETCH_PROTOCOL,
+  PEER_DB_SYNC_MANIFEST_PROTOCOL,
+  PEER_DB_SYNC_VERIFY_PROTOCOL,
+  PEER_DM_DELETE_GOSSIP_PROTOCOL,
   PEER_SERVER_SCORE_GOSSIP_PROTOCOL,
 } from './constants/peer_protocol.constants';
 import {
@@ -18,9 +23,19 @@ import {
   ServerScoreReportValidationResult,
 } from './types/server_score.types';
 import {
+  DmDeleteGossipEvent,
+  SyncFetchByKeysRequest,
+  SyncFetchRequest,
+  SyncManifestRequest,
+  SyncVerifyBatchRequest,
+} from './sync/types/sync_wire.types';
+import {
   create_server_score_signature,
   verify_server_score_signature,
 } from './utils/server_score_signature.util';
+import { DmDeleteGossipService } from './sync/services/dm_delete_gossip.service';
+import { StartupSyncService } from './sync/services/startup_sync.service';
+import { TableSyncRunnerService } from './sync/services/table_sync_runner.service';
 
 type ConnectedPeerSnapshot = {
   peer_id: string;
@@ -68,9 +83,12 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
   private score_gossip_timer: NodeJS.Timeout | null = null;
 
   constructor(
+    private readonly dm_delete_gossip_service: DmDeleteGossipService,
     private readonly network_trace_service: NetworkTraceService,
     private readonly prisma_service: PrismaService,
     private readonly server_identity_service: ServerIdentityService,
+    private readonly startup_sync_service: StartupSyncService,
+    private readonly table_sync_runner_service: TableSyncRunnerService,
   ) {}
 
   async onModuleInit() {
@@ -186,6 +204,7 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
     this.score_gossip_timer = setInterval(() => {
       void this.run_server_score_cycle();
     }, this.p2p_config.score_gossip_interval_ms);
+    await this.run_startup_sync_with_timeout();
   }
 
   async onModuleDestroy() {
@@ -331,6 +350,29 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  async publish_dm_delete_gossip(
+    message_id: string,
+    recipient_public_key: string,
+  ) {
+    if (this.libp2p_node == null || !this.p2p_config.sync_enabled) {
+      return;
+    }
+
+    const local_peer_id = this.get_local_peer_id();
+    const server_identity = await this.server_identity_service.get_public_key();
+    const event = await this.dm_delete_gossip_service.create_event({
+      local_peer_id,
+      max_hops: Math.max(1, this.p2p_config.sync_validator_target),
+      message_id,
+      recipient_public_key,
+      reporter_server_public_key: server_identity.public_key,
+      sign_message: async (message) =>
+        this.server_identity_service.sign_message(message),
+    });
+
+    await this.broadcast_dm_delete_gossip_event(event);
+  }
+
   private register_protocol_handlers() {
     if (this.libp2p_node == null) {
       return;
@@ -430,6 +472,208 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
       },
     );
 
+    this.libp2p_node.handle(
+      PEER_DB_SYNC_MANIFEST_PROTOCOL,
+      async (stream: any, connection: any) => {
+        const remote_peer_id =
+          connection?.remotePeer?.toString?.() ?? 'unknown_peer';
+        const payload_text = await this.read_stream_payload(stream);
+        const payload = this.parse_json(payload_text);
+
+        if (!this.is_sync_manifest_request(payload)) {
+          this.trace_event(
+            'p2p.sync_manifest_rejected',
+            'warn',
+            {
+              reason: 'Invalid sync manifest request payload.',
+            },
+            remote_peer_id,
+          );
+          return;
+        }
+
+        const response =
+          await this.table_sync_runner_service.create_manifest_response(
+            payload.run_id,
+            this.get_local_peer_id(),
+          );
+
+        await stream.sink(create_single_chunk_source(JSON.stringify(response)));
+      },
+    );
+
+    this.libp2p_node.handle(
+      PEER_DB_SYNC_FETCH_PROTOCOL,
+      async (stream: any, connection: any) => {
+        const remote_peer_id =
+          connection?.remotePeer?.toString?.() ?? 'unknown_peer';
+        const payload_text = await this.read_stream_payload(stream);
+        const payload = this.parse_json(payload_text);
+
+        if (!this.is_sync_fetch_request(payload)) {
+          this.trace_event(
+            'p2p.sync_fetch_rejected',
+            'warn',
+            {
+              reason: 'Invalid sync fetch request payload.',
+            },
+            remote_peer_id,
+          );
+          return;
+        }
+
+        const response =
+          await this.table_sync_runner_service.handle_fetch_request(payload);
+
+        await stream.sink(create_single_chunk_source(JSON.stringify(response)));
+      },
+    );
+
+    this.libp2p_node.handle(
+      PEER_DB_SYNC_VERIFY_PROTOCOL,
+      async (stream: any, connection: any) => {
+        const remote_peer_id =
+          connection?.remotePeer?.toString?.() ?? 'unknown_peer';
+        const payload_text = await this.read_stream_payload(stream);
+        const payload = this.parse_json(payload_text);
+
+        if (!this.is_sync_verify_request(payload)) {
+          this.trace_event(
+            'p2p.sync_verify_rejected',
+            'warn',
+            {
+              reason: 'Invalid sync verify request payload.',
+            },
+            remote_peer_id,
+          );
+          return;
+        }
+
+        const response =
+          await this.table_sync_runner_service.handle_verify_request(payload);
+
+        await stream.sink(create_single_chunk_source(JSON.stringify(response)));
+      },
+    );
+
+    this.libp2p_node.handle(
+      PEER_DB_SYNC_FETCH_BY_KEYS_PROTOCOL,
+      async (stream: any, connection: any) => {
+        const remote_peer_id =
+          connection?.remotePeer?.toString?.() ?? 'unknown_peer';
+        const payload_text = await this.read_stream_payload(stream);
+        const payload = this.parse_json(payload_text);
+
+        if (!this.is_sync_fetch_by_keys_request(payload)) {
+          this.trace_event(
+            'p2p.sync_fetch_by_keys_rejected',
+            'warn',
+            {
+              reason: 'Invalid sync fetch-by-keys request payload.',
+            },
+            remote_peer_id,
+          );
+          return;
+        }
+
+        const response =
+          await this.table_sync_runner_service.handle_fetch_by_keys_request(
+            payload,
+          );
+
+        await stream.sink(create_single_chunk_source(JSON.stringify(response)));
+      },
+    );
+
+    this.libp2p_node.handle(
+      PEER_DM_DELETE_GOSSIP_PROTOCOL,
+      async (stream: any, connection: any) => {
+        const sender_peer_id =
+          connection?.remotePeer?.toString?.() ?? 'unknown_peer';
+        const payload_text = await this.read_stream_payload(stream);
+        const payload = this.parse_json(payload_text);
+        const event = this.dm_delete_gossip_service.parse_event(payload);
+
+        if (!event) {
+          this.trace_event(
+            'p2p.dm_delete_gossip_rejected',
+            'warn',
+            {
+              reason: 'Invalid DM delete gossip payload.',
+            },
+            sender_peer_id,
+          );
+          return;
+        }
+
+        if (
+          !this.dm_delete_gossip_service.should_process_event(event.event_id)
+        ) {
+          return;
+        }
+
+        const is_valid_signature =
+          await this.dm_delete_gossip_service.verify_event_signature(event);
+
+        if (!is_valid_signature) {
+          this.trace_event(
+            'p2p.dm_delete_gossip_rejected',
+            'warn',
+            {
+              event_id: event.event_id,
+              reason: 'DM delete gossip signature verification failed.',
+            },
+            sender_peer_id,
+          );
+          return;
+        }
+
+        await this.prisma_service.directMessage.deleteMany({
+          where: {
+            id: event.message_id,
+          },
+        });
+        this.trace_event(
+          'p2p.dm_delete_gossip_applied',
+          'info',
+          {
+            event_id: event.event_id,
+            hop_count: event.hop_count,
+            message_id: event.message_id,
+            recipient_public_key: event.recipient_public_key,
+          },
+          sender_peer_id,
+        );
+
+        if (!this.dm_delete_gossip_service.can_forward(event)) {
+          await stream.sink(
+            create_single_chunk_source(
+              JSON.stringify({
+                event_id: event.event_id,
+                status: 'ok',
+                type: 'dm.delete.gossip.ack',
+              }),
+            ),
+          );
+          return;
+        }
+
+        await this.broadcast_dm_delete_gossip_event(
+          this.dm_delete_gossip_service.create_forwarded_event(event),
+          sender_peer_id,
+        );
+        await stream.sink(
+          create_single_chunk_source(
+            JSON.stringify({
+              event_id: event.event_id,
+              status: 'ok',
+              type: 'dm.delete.gossip.ack',
+            }),
+          ),
+        );
+      },
+    );
+
     this.libp2p_node.addEventListener?.('peer:connect', (event: any) => {
       const connection = event?.detail;
       const peer_id =
@@ -444,6 +688,11 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
         is_active: true,
         listen_addresses: remote_address ? [remote_address] : undefined,
       });
+      void this.startup_sync_service.run_sync(
+        'peer_reconnect',
+        this.build_sync_runtime(),
+        false,
+      );
     });
 
     this.libp2p_node.addEventListener?.('peer:disconnect', (event: any) => {
@@ -800,6 +1049,208 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
     throw new Error('Failed to open protocol stream for connected peer.');
   }
 
+  private build_sync_runtime() {
+    return {
+      connected_peer_ids: this.get_connected_peers().map(
+        (peer) => peer.peer_id,
+      ),
+      local_peer_id: this.get_local_peer_id(),
+      request_peer: async (
+        peer_id: string,
+        protocol: string,
+        payload: unknown,
+      ) => this.request_peer_protocol_json(peer_id, protocol, payload),
+    };
+  }
+
+  private async run_startup_sync_with_timeout() {
+    if (!this.p2p_config.sync_enabled) {
+      return;
+    }
+
+    const sync_promise = this.startup_sync_service.run_sync(
+      'startup',
+      this.build_sync_runtime(),
+      true,
+    );
+    const timeout_promise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(
+          new Error(
+            `Startup sync timed out after ${this.p2p_config.sync_startup_timeout_ms}ms.`,
+          ),
+        );
+      }, this.p2p_config.sync_startup_timeout_ms);
+    });
+
+    try {
+      await Promise.race([sync_promise, timeout_promise]);
+    } catch (error) {
+      this.logger.warn(
+        error instanceof Error ? error.message : 'Startup sync timed out.',
+      );
+      this.trace_event('p2p.sync_startup_timeout', 'warn', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async request_peer_protocol_json(
+    peer_id: string,
+    protocol: string,
+    payload: unknown,
+  ) {
+    const peer_connection = this.get_connected_peer_connection(peer_id);
+
+    if (!peer_connection) {
+      throw new Error(`Peer ${peer_id} is not connected.`);
+    }
+
+    const stream = await this.open_peer_protocol_stream(
+      peer_connection,
+      protocol,
+    );
+
+    await stream.sink(create_single_chunk_source(JSON.stringify(payload)));
+
+    const response_text = await this.read_stream_payload(stream);
+    const parsed_payload = this.parse_json(response_text);
+
+    if (parsed_payload == null) {
+      throw new Error(
+        `Failed to parse protocol response from peer ${peer_id} on ${protocol}.`,
+      );
+    }
+
+    return parsed_payload;
+  }
+
+  private async broadcast_dm_delete_gossip_event(
+    event: DmDeleteGossipEvent,
+    exclude_peer_id?: string,
+  ) {
+    const connected_peers = this.get_connected_peers().filter(
+      (peer) => peer.peer_id !== exclude_peer_id,
+    );
+
+    await Promise.all(
+      connected_peers.map(async (peer) => {
+        try {
+          const peer_connection = this.get_connected_peer_connection(
+            peer.peer_id,
+          );
+
+          if (!peer_connection) {
+            return;
+          }
+
+          const stream = await this.open_peer_protocol_stream(
+            peer_connection,
+            PEER_DM_DELETE_GOSSIP_PROTOCOL,
+          );
+          await stream.sink(create_single_chunk_source(JSON.stringify(event)));
+          this.trace_event(
+            'p2p.dm_delete_gossip_sent',
+            'info',
+            {
+              event_id: event.event_id,
+              hop_count: event.hop_count,
+              message_id: event.message_id,
+            },
+            peer.peer_id,
+          );
+        } catch (error) {
+          this.trace_event(
+            'p2p.dm_delete_gossip_send_failed',
+            'warn',
+            {
+              error: error instanceof Error ? error.message : String(error),
+              event_id: event.event_id,
+              message_id: event.message_id,
+            },
+            peer.peer_id,
+          );
+        }
+      }),
+    );
+  }
+
+  private parse_json(value: string) {
+    if (!value.trim()) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+
+  private is_sync_manifest_request(
+    value: unknown,
+  ): value is SyncManifestRequest {
+    if (typeof value !== 'object' || value == null) {
+      return false;
+    }
+
+    const candidate = value as Record<string, unknown>;
+
+    return (
+      candidate.type === 'sync.manifest.request' &&
+      typeof candidate.run_id === 'string'
+    );
+  }
+
+  private is_sync_fetch_request(value: unknown): value is SyncFetchRequest {
+    if (typeof value !== 'object' || value == null) {
+      return false;
+    }
+
+    const candidate = value as Record<string, unknown>;
+
+    return (
+      candidate.type === 'sync.fetch.request' &&
+      typeof candidate.run_id === 'string' &&
+      typeof candidate.table === 'string' &&
+      typeof candidate.limit === 'number'
+    );
+  }
+
+  private is_sync_verify_request(
+    value: unknown,
+  ): value is SyncVerifyBatchRequest {
+    if (typeof value !== 'object' || value == null) {
+      return false;
+    }
+
+    const candidate = value as Record<string, unknown>;
+
+    return (
+      candidate.type === 'sync.verify.request' &&
+      typeof candidate.run_id === 'string' &&
+      typeof candidate.table === 'string' &&
+      Array.isArray(candidate.rows)
+    );
+  }
+
+  private is_sync_fetch_by_keys_request(
+    value: unknown,
+  ): value is SyncFetchByKeysRequest {
+    if (typeof value !== 'object' || value == null) {
+      return false;
+    }
+
+    const candidate = value as Record<string, unknown>;
+
+    return (
+      candidate.type === 'sync.fetch_by_keys.request' &&
+      typeof candidate.run_id === 'string' &&
+      typeof candidate.table === 'string' &&
+      Array.isArray(candidate.keys)
+    );
+  }
+
   private create_report_batches(
     reports: ServerScoreReportPayload[],
     batch_size: number,
@@ -878,14 +1329,15 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const existing_reporter_node = await this.prisma_service.serverNode.findUnique({
-      where: {
-        peer_id: report.reporter_peer_id,
-      },
-      select: {
-        server_public_key: true,
-      },
-    });
+    const existing_reporter_node =
+      await this.prisma_service.serverNode.findUnique({
+        where: {
+          peer_id: report.reporter_peer_id,
+        },
+        select: {
+          server_public_key: true,
+        },
+      });
 
     if (
       existing_reporter_node?.server_public_key &&
