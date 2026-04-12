@@ -225,6 +225,23 @@ Document and keep these values consistent:
 - `WS_ACK_TIMEOUT_MS`
 - `WS_MAX_RETRIES`
 
+### P2P Keep-Alive Environment Variables
+
+Document and keep these values consistent:
+
+- `P2P_ENABLED`
+- `P2P_LISTEN`
+- `P2P_BOOTSTRAP`
+- `P2P_KEEP_ALIVE_ENABLED`
+- `P2P_KEEP_ALIVE_CORE_COUNT`
+- `P2P_KEEP_ALIVE_RECONCILE_MS`
+- `P2P_KEEP_ALIVE_REDIAL_MS`
+- `P2P_RECONNECT_RETRIES`
+- `P2P_RECONNECT_RETRY_INTERVAL_MS`
+- `P2P_RECONNECT_BACKOFF_FACTOR`
+- `P2P_MAX_PARALLEL_RECONNECTS`
+- `P2P_DIAL_TIMEOUT_MS`
+
 ## Testing Rules
 
 - Place unit tests next to the related source file when practical, using `*.spec.ts`.

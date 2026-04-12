@@ -61,6 +61,8 @@ type CandidateAggregateSnapshot = {
   target_peer_id: string;
 };
 
+type KeepAliveRole = 'bootstrap' | 'core';
+
 function normalize_chunk(chunk: StreamChunk): Uint8Array {
   return chunk instanceof Uint8Array ? chunk : chunk.subarray();
 }
@@ -73,6 +75,10 @@ function create_single_chunk_source(payload: string) {
 
 @Injectable()
 export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
+  private static readonly KEEP_ALIVE_BOOTSTRAP_TAG =
+    'keep-alive-open-chat-bootstrap';
+  private static readonly KEEP_ALIVE_CORE_TAG = 'keep-alive-open-chat-core';
+
   private readonly logger = new Logger(PeerNetworkService.name);
   private readonly p2p_config = get_p2p_config();
   private readonly local_peer_observations = new Map<
@@ -80,6 +86,20 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
     LocalPeerObservation
   >();
   private libp2p_node: any = null;
+  private readonly keep_alive_bootstrap_peer_ids = new Set<string>();
+  private readonly keep_alive_bootstrap_address_by_peer_id = new Map<
+    string,
+    string
+  >();
+  private readonly keep_alive_desired_peers = new Map<string, KeepAliveRole>();
+  private readonly keep_alive_dialing_peer_ids = new Set<string>();
+  private keep_alive_redial_in_flight = false;
+  private keep_alive_reconcile_in_flight = false;
+  private keep_alive_redial_timer: NodeJS.Timeout | null = null;
+  private keep_alive_reconcile_timer: NodeJS.Timeout | null = null;
+  private keep_alive_set_signature = '';
+  private peer_id_from_string: ((peer_id: string) => any) | null = null;
+  private multiaddr_factory: ((address: string) => any) | null = null;
   private score_gossip_timer: NodeJS.Timeout | null = null;
 
   constructor(
@@ -110,6 +130,7 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
       { ping },
       { identify },
       { multiaddr },
+      { peerIdFromString },
     ] = await Promise.all([
       import('libp2p'),
       import('@libp2p/tcp'),
@@ -120,7 +141,11 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
       import('@libp2p/ping'),
       import('@libp2p/identify'),
       import('@multiformats/multiaddr'),
+      import('@libp2p/peer-id'),
     ]);
+
+    this.multiaddr_factory = multiaddr;
+    this.peer_id_from_string = peerIdFromString;
 
     this.libp2p_node = await createLibp2p({
       addresses: {
@@ -130,9 +155,14 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
       connectionEncrypters: [noise()],
       streamMuxers: [yamux()],
       connectionManager: {
+        dialTimeout: this.p2p_config.dial_timeout_ms,
         maxConnections: Math.max(32, this.p2p_config.target_peers * 2),
+        maxParallelReconnects: this.p2p_config.max_parallel_reconnects,
         maxParallelDials: Math.max(25, this.p2p_config.target_peers),
         maxIncomingPendingConnections: 20,
+        reconnectRetries: this.p2p_config.reconnect_retries,
+        reconnectRetryInterval: this.p2p_config.reconnect_retry_interval_ms,
+        reconnectBackoffFactor: this.p2p_config.reconnect_backoff_factor,
       },
       services: {
         identify: identify(),
@@ -158,6 +188,13 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
       const normalized_address =
         this.normalize_bootstrap_address(bootstrap_address);
       const peer_id = this.extract_peer_id_from_multiaddr(normalized_address);
+      if (peer_id) {
+        this.keep_alive_bootstrap_peer_ids.add(peer_id);
+        this.keep_alive_bootstrap_address_by_peer_id.set(
+          peer_id,
+          normalized_address,
+        );
+      }
       this.note_dial_attempt(peer_id);
 
       this.trace_event(
@@ -204,10 +241,30 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
     this.score_gossip_timer = setInterval(() => {
       void this.run_server_score_cycle();
     }, this.p2p_config.score_gossip_interval_ms);
+    await this.reconcile_keep_alive_tags('startup');
+    await this.redial_keep_alive_peers();
+
+    if (this.p2p_config.keep_alive_enabled) {
+      this.keep_alive_reconcile_timer = setInterval(() => {
+        void this.reconcile_keep_alive_tags('periodic');
+      }, this.p2p_config.keep_alive_reconcile_ms);
+      this.keep_alive_redial_timer = setInterval(() => {
+        void this.redial_keep_alive_peers();
+      }, this.p2p_config.keep_alive_redial_ms);
+    }
+
     await this.run_startup_sync_with_timeout();
   }
 
   async onModuleDestroy() {
+    if (this.keep_alive_reconcile_timer) {
+      clearInterval(this.keep_alive_reconcile_timer);
+    }
+
+    if (this.keep_alive_redial_timer) {
+      clearInterval(this.keep_alive_redial_timer);
+    }
+
     if (this.score_gossip_timer) {
       clearInterval(this.score_gossip_timer);
     }
@@ -686,6 +743,7 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
         is_active: true,
         listen_addresses: remote_address ? [remote_address] : undefined,
       });
+      void this.reconcile_keep_alive_tags('peer_event');
       void this.startup_sync_service.run_sync(
         'peer_reconnect',
         this.build_sync_runtime(),
@@ -705,6 +763,8 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
       void this.touch_peer_node(peer_id, {
         is_active: false,
       });
+      void this.reconcile_keep_alive_tags('peer_event');
+      void this.redial_keep_alive_peers();
     });
   }
 
@@ -778,6 +838,433 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
     return Array.from(peer_map.values()).sort((a, b) =>
       a.peer_id.localeCompare(b.peer_id),
     );
+  }
+
+  private async reconcile_keep_alive_tags(
+    trigger: 'peer_event' | 'periodic' | 'startup',
+  ) {
+    if (!this.p2p_config.keep_alive_enabled || this.libp2p_node == null) {
+      return;
+    }
+
+    if (this.keep_alive_reconcile_in_flight) {
+      return;
+    }
+
+    this.keep_alive_reconcile_in_flight = true;
+
+    try {
+      const desired_keep_alive_peers =
+        await this.build_desired_keep_alive_peers();
+      const peer_store = this.libp2p_node?.peerStore;
+
+      if (!peer_store) {
+        return;
+      }
+
+      const peer_store_peers = await peer_store.all();
+      const existing_keep_alive_role_by_peer_id = new Map<
+        string,
+        KeepAliveRole
+      >();
+
+      for (const peer of peer_store_peers) {
+        const peer_id = peer?.id?.toString?.();
+        if (!peer_id) {
+          continue;
+        }
+
+        if (
+          peer?.tags?.has?.(PeerNetworkService.KEEP_ALIVE_BOOTSTRAP_TAG) ===
+          true
+        ) {
+          existing_keep_alive_role_by_peer_id.set(peer_id, 'bootstrap');
+          continue;
+        }
+
+        if (peer?.tags?.has?.(PeerNetworkService.KEEP_ALIVE_CORE_TAG) === true) {
+          existing_keep_alive_role_by_peer_id.set(peer_id, 'core');
+        }
+      }
+
+      let applied_tag_count = 0;
+      let removed_tag_count = 0;
+
+      for (const [peer_id, role] of desired_keep_alive_peers.entries()) {
+        if (existing_keep_alive_role_by_peer_id.get(peer_id) === role) {
+          continue;
+        }
+
+        const peer_id_object = this.parse_peer_id(peer_id);
+
+        if (!peer_id_object) {
+          continue;
+        }
+
+        const tag_to_apply = this.get_keep_alive_tag(role);
+        const tag_to_remove =
+          role === 'bootstrap'
+            ? PeerNetworkService.KEEP_ALIVE_CORE_TAG
+            : PeerNetworkService.KEEP_ALIVE_BOOTSTRAP_TAG;
+
+        await peer_store.merge(peer_id_object, {
+          tags: {
+            [tag_to_apply]: {
+              value: role === 'bootstrap' ? 100 : 80,
+            },
+            [tag_to_remove]: undefined,
+          },
+        });
+        applied_tag_count += 1;
+        this.trace_event(
+          'p2p.keep_alive_tag_applied',
+          'info',
+          {
+            role,
+            tag: tag_to_apply,
+          },
+          peer_id,
+        );
+      }
+
+      for (const peer of peer_store_peers) {
+        const peer_id = peer?.id?.toString?.();
+
+        if (!peer_id || desired_keep_alive_peers.has(peer_id)) {
+          continue;
+        }
+
+        const has_keep_alive_bootstrap_tag =
+          peer?.tags?.has?.(PeerNetworkService.KEEP_ALIVE_BOOTSTRAP_TAG) ===
+          true;
+        const has_keep_alive_core_tag =
+          peer?.tags?.has?.(PeerNetworkService.KEEP_ALIVE_CORE_TAG) === true;
+
+        if (!has_keep_alive_bootstrap_tag && !has_keep_alive_core_tag) {
+          continue;
+        }
+
+        await peer_store.merge(peer.id, {
+          tags: {
+            [PeerNetworkService.KEEP_ALIVE_BOOTSTRAP_TAG]: undefined,
+            [PeerNetworkService.KEEP_ALIVE_CORE_TAG]: undefined,
+          },
+        });
+        removed_tag_count += 1;
+        this.trace_event(
+          'p2p.keep_alive_tag_removed',
+          'info',
+          {
+            removed_tags: [
+              PeerNetworkService.KEEP_ALIVE_BOOTSTRAP_TAG,
+              PeerNetworkService.KEEP_ALIVE_CORE_TAG,
+            ],
+          },
+          peer_id,
+        );
+      }
+
+      this.keep_alive_desired_peers.clear();
+
+      for (const [peer_id, role] of desired_keep_alive_peers.entries()) {
+        this.keep_alive_desired_peers.set(peer_id, role);
+      }
+
+      const keep_alive_set_signature = this.create_keep_alive_set_signature(
+        this.keep_alive_desired_peers,
+      );
+      const set_changed = keep_alive_set_signature !== this.keep_alive_set_signature;
+      this.keep_alive_set_signature = keep_alive_set_signature;
+
+      if (set_changed || trigger !== 'periodic') {
+        const bootstrap_count = Array.from(
+          this.keep_alive_desired_peers.values(),
+        ).filter((role) => role === 'bootstrap').length;
+        const core_count = Array.from(this.keep_alive_desired_peers.values()).filter(
+          (role) => role === 'core',
+        ).length;
+
+        this.trace_event('p2p.keep_alive_set_updated', 'info', {
+          applied_tag_count,
+          bootstrap_count,
+          changed: set_changed,
+          core_count,
+          desired_peer_count: this.keep_alive_desired_peers.size,
+          removed_tag_count,
+          trigger,
+        });
+      }
+    } catch (error) {
+      this.trace_event('p2p.keep_alive_set_updated', 'warn', {
+        error: error instanceof Error ? error.message : String(error),
+        trigger,
+      });
+    } finally {
+      this.keep_alive_reconcile_in_flight = false;
+    }
+  }
+
+  private async redial_keep_alive_peers() {
+    if (!this.p2p_config.keep_alive_enabled || this.libp2p_node == null) {
+      return;
+    }
+
+    if (this.keep_alive_redial_in_flight) {
+      return;
+    }
+
+    this.keep_alive_redial_in_flight = true;
+
+    try {
+      if (this.keep_alive_desired_peers.size === 0) {
+        await this.reconcile_keep_alive_tags('periodic');
+      }
+
+      for (const [peer_id, role] of this.keep_alive_desired_peers.entries()) {
+        if (
+          this.is_peer_directly_connected(peer_id) ||
+          this.keep_alive_dialing_peer_ids.has(peer_id) ||
+          this.is_peer_in_dial_queue(peer_id)
+        ) {
+          continue;
+        }
+
+        const bootstrap_address =
+          this.keep_alive_bootstrap_address_by_peer_id.get(peer_id);
+        const peer_id_object = this.parse_peer_id(peer_id);
+
+        if (!peer_id_object && !bootstrap_address) {
+          this.trace_event(
+            'p2p.keep_alive_redial_failed',
+            'warn',
+            {
+              reason: 'Unable to parse peer id for keep-alive dial target.',
+              role,
+            },
+            peer_id,
+          );
+          continue;
+        }
+
+        const peer_store_entry = await this.get_peer_store_peer(peer_id_object);
+        const has_known_addresses =
+          (peer_store_entry?.addresses?.length ?? 0) > 0 ||
+          Boolean(bootstrap_address);
+
+        if (!has_known_addresses) {
+          this.trace_event(
+            'p2p.keep_alive_redial_failed',
+            'warn',
+            {
+              reason: 'Peer has no known addresses to dial.',
+              role,
+            },
+            peer_id,
+          );
+          continue;
+        }
+
+        const dial_target =
+          role === 'bootstrap' && bootstrap_address && this.multiaddr_factory
+            ? this.multiaddr_factory(bootstrap_address)
+            : peer_id_object;
+
+        if (!dial_target) {
+          this.trace_event(
+            'p2p.keep_alive_redial_failed',
+            'warn',
+            {
+              reason: 'Failed to build dial target.',
+              role,
+            },
+            peer_id,
+          );
+          continue;
+        }
+
+        this.keep_alive_dialing_peer_ids.add(peer_id);
+        this.note_dial_attempt(peer_id);
+        this.trace_event(
+          'p2p.keep_alive_redial_attempt',
+          'info',
+          {
+            role,
+          },
+          peer_id,
+        );
+
+        try {
+          await this.libp2p_node.dial(dial_target);
+          this.note_dial_success(peer_id);
+          this.trace_event(
+            'p2p.keep_alive_redial_succeeded',
+            'info',
+            {
+              role,
+            },
+            peer_id,
+          );
+        } catch (error) {
+          this.note_dial_failure(peer_id);
+          this.trace_event(
+            'p2p.keep_alive_redial_failed',
+            'warn',
+            {
+              error: error instanceof Error ? error.message : String(error),
+              role,
+            },
+            peer_id,
+          );
+        } finally {
+          this.keep_alive_dialing_peer_ids.delete(peer_id);
+        }
+      }
+    } finally {
+      this.keep_alive_redial_in_flight = false;
+    }
+  }
+
+  private async build_desired_keep_alive_peers() {
+    const desired_keep_alive_peers = new Map<string, KeepAliveRole>();
+    const local_peer_id = this.get_local_peer_id();
+
+    for (const bootstrap_peer_id of this.keep_alive_bootstrap_peer_ids.values()) {
+      if (
+        bootstrap_peer_id &&
+        bootstrap_peer_id !== local_peer_id &&
+        bootstrap_peer_id !== 'unknown_peer'
+      ) {
+        desired_keep_alive_peers.set(bootstrap_peer_id, 'bootstrap');
+      }
+    }
+
+    const core_peer_ids = await this.select_core_keep_alive_peer_ids(
+      local_peer_id,
+      desired_keep_alive_peers,
+    );
+
+    for (const core_peer_id of core_peer_ids) {
+      if (!desired_keep_alive_peers.has(core_peer_id)) {
+        desired_keep_alive_peers.set(core_peer_id, 'core');
+      }
+    }
+
+    return desired_keep_alive_peers;
+  }
+
+  private async select_core_keep_alive_peer_ids(
+    local_peer_id: string,
+    existing_peer_ids: Map<string, KeepAliveRole>,
+  ) {
+    const normalized_core_count = Math.max(
+      0,
+      Math.trunc(this.p2p_config.keep_alive_core_count),
+    );
+
+    if (normalized_core_count === 0) {
+      return [] as string[];
+    }
+
+    const now = new Date();
+    const max_records = Math.max(normalized_core_count * 8, 64);
+    const [aggregates, server_nodes] = await Promise.all([
+      this.compute_candidate_aggregates(
+        this.p2p_config.score_default_max_report_age_seconds,
+        now,
+      ),
+      this.prisma_service.serverNode.findMany({
+        where: {
+          peer_id: {
+            not: local_peer_id,
+          },
+        },
+        orderBy: [
+          {
+            is_active: 'desc',
+          },
+          {
+            last_seen_at: 'desc',
+          },
+        ],
+        take: max_records,
+      }),
+    ]);
+    const connected_peer_ids = new Set(
+      this.get_connected_peers().map((peer) => peer.peer_id),
+    );
+    const aggregate_by_peer_id = new Map(
+      aggregates.map((aggregate) => [aggregate.target_peer_id, aggregate]),
+    );
+    const server_node_by_peer_id = new Map(
+      server_nodes.map((server_node) => [server_node.peer_id, server_node]),
+    );
+    const candidate_peer_ids = new Set<string>();
+
+    for (const connected_peer_id of connected_peer_ids.values()) {
+      candidate_peer_ids.add(connected_peer_id);
+    }
+
+    for (const observed_peer_id of this.local_peer_observations.keys()) {
+      candidate_peer_ids.add(observed_peer_id);
+    }
+
+    for (const aggregate of aggregates) {
+      candidate_peer_ids.add(aggregate.target_peer_id);
+    }
+
+    for (const server_node of server_nodes) {
+      candidate_peer_ids.add(server_node.peer_id);
+    }
+
+    const ranked_candidates = Array.from(candidate_peer_ids.values())
+      .filter(
+        (peer_id) =>
+          peer_id &&
+          peer_id !== local_peer_id &&
+          peer_id !== 'unknown_peer' &&
+          !existing_peer_ids.has(peer_id),
+      )
+      .map((peer_id) => {
+        const aggregate = aggregate_by_peer_id.get(peer_id);
+        const server_node = server_node_by_peer_id.get(peer_id);
+        const observation = this.local_peer_observations.get(peer_id);
+        const freshness_ms = Math.max(
+          aggregate?.last_observed_at_ms ?? 0,
+          server_node?.last_seen_at?.getTime?.() ?? 0,
+          observation?.last_event_at_ms ?? 0,
+        );
+
+        return {
+          freshness_ms,
+          is_connected: connected_peer_ids.has(peer_id) ? 1 : 0,
+          mean_score: aggregate?.mean_score ?? -1,
+          peer_id,
+          report_count: aggregate?.report_count ?? 0,
+        };
+      })
+      .sort((left, right) => {
+        if (right.mean_score !== left.mean_score) {
+          return right.mean_score - left.mean_score;
+        }
+
+        if (right.report_count !== left.report_count) {
+          return right.report_count - left.report_count;
+        }
+
+        if (right.is_connected !== left.is_connected) {
+          return right.is_connected - left.is_connected;
+        }
+
+        if (right.freshness_ms !== left.freshness_ms) {
+          return right.freshness_ms - left.freshness_ms;
+        }
+
+        return left.peer_id.localeCompare(right.peer_id);
+      });
+
+    return ranked_candidates
+      .slice(0, normalized_core_count)
+      .map((candidate) => candidate.peer_id);
   }
 
   private async run_server_score_cycle() {
@@ -2041,6 +2528,71 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
           connection?.status !== 'closed',
       ) ?? null
     );
+  }
+
+  private create_keep_alive_set_signature(
+    keep_alive_peers: Map<string, KeepAliveRole>,
+  ) {
+    return Array.from(keep_alive_peers.entries())
+      .sort(([left_peer_id], [right_peer_id]) =>
+        left_peer_id.localeCompare(right_peer_id),
+      )
+      .map(([peer_id, role]) => `${peer_id}:${role}`)
+      .join('|');
+  }
+
+  private get_keep_alive_tag(role: KeepAliveRole) {
+    return role === 'bootstrap'
+      ? PeerNetworkService.KEEP_ALIVE_BOOTSTRAP_TAG
+      : PeerNetworkService.KEEP_ALIVE_CORE_TAG;
+  }
+
+  private parse_peer_id(peer_id: string) {
+    if (!this.peer_id_from_string) {
+      return null;
+    }
+
+    try {
+      return this.peer_id_from_string(peer_id);
+    } catch {
+      return null;
+    }
+  }
+
+  private async get_peer_store_peer(peer_id_object: any) {
+    if (!peer_id_object) {
+      return null;
+    }
+
+    const peer_store = this.libp2p_node?.peerStore;
+
+    if (!peer_store?.get) {
+      return null;
+    }
+
+    try {
+      return await peer_store.get(peer_id_object);
+    } catch {
+      return null;
+    }
+  }
+
+  private is_peer_in_dial_queue(peer_id: string) {
+    const dial_queue = this.libp2p_node?.getDialQueue?.();
+
+    if (!Array.isArray(dial_queue)) {
+      return false;
+    }
+
+    return dial_queue.some((pending_dial: any) => {
+      const queued_peer_id =
+        pending_dial?.peer?.id?.toString?.() ??
+        pending_dial?.peerId?.toString?.() ??
+        pending_dial?.id?.toString?.() ??
+        null;
+
+      return queued_peer_id === peer_id;
+    });
   }
 
   private is_peer_directly_connected(peer_id: string) {
