@@ -392,9 +392,12 @@ export class TableSyncRunnerService {
           created_at: new Date(row.createdAt).toISOString(),
           expires_at: new Date(row.expiresAt).toISOString(),
           id: row.id,
+          is_replica_copy: row.is_replica_copy,
           message: row.message,
           message_hash: row.message_hash,
+          origin_server_peer_id: row.origin_server_peer_id,
           recipient_public_key: row.recipient_public_key,
+          replica_peer_ids: row.replica_peer_ids,
           send_time: new Date(row.send_time).toISOString(),
           sender_public_key: row.sender_public_key,
           sender_signature: row.sender_signature,
@@ -634,6 +637,9 @@ export class TableSyncRunnerService {
 
   private async apply_direct_message(row: SyncRowEnvelope) {
     const payload = row.payload;
+    const replica_peer_ids = Array.isArray(payload.replica_peer_ids)
+      ? payload.replica_peer_ids
+      : undefined;
     const existing = await this.prisma_service.directMessage.findUnique({
       where: {
         id: row.primary_key,
@@ -657,9 +663,14 @@ export class TableSyncRunnerService {
       update: {
         algorithm: String(payload.algorithm),
         expiresAt: new Date(String(payload.expires_at)),
+        is_replica_copy: Boolean(payload.is_replica_copy),
         message: String(payload.message),
         message_hash: String(payload.message_hash),
+        origin_server_peer_id: payload.origin_server_peer_id
+          ? String(payload.origin_server_peer_id)
+          : null,
         recipient_public_key: String(payload.recipient_public_key),
+        replica_peer_ids,
         send_time: new Date(String(payload.send_time)),
         sender_public_key: String(payload.sender_public_key),
         sender_signature: String(payload.sender_signature),
@@ -669,9 +680,14 @@ export class TableSyncRunnerService {
         algorithm: String(payload.algorithm),
         expiresAt: new Date(String(payload.expires_at)),
         id: row.primary_key,
+        is_replica_copy: Boolean(payload.is_replica_copy),
         message: String(payload.message),
         message_hash: String(payload.message_hash),
+        origin_server_peer_id: payload.origin_server_peer_id
+          ? String(payload.origin_server_peer_id)
+          : null,
         recipient_public_key: String(payload.recipient_public_key),
+        replica_peer_ids,
         send_time: new Date(String(payload.send_time)),
         sender_public_key: String(payload.sender_public_key),
         sender_signature: String(payload.sender_signature),

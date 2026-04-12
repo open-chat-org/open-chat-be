@@ -50,6 +50,11 @@ export type User = Prisma.UserModel
  */
 export type DirectMessage = Prisma.DirectMessageModel
 /**
+ * Model UserPresence
+ * 
+ */
+export type UserPresence = Prisma.UserPresenceModel
+/**
  * Model ServerNode
  * 
  */

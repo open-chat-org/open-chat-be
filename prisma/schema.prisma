@@ -31,6 +31,9 @@ model DirectMessage {
   sender_public_key        String   @map("sender_public_key")
   sender_x25519_public_key String   @map("sender_x25519_public_key")
   recipient_public_key     String   @map("recipient_public_key")
+  origin_server_peer_id    String?  @map("origin_server_peer_id")
+  replica_peer_ids         Json?    @map("replica_peer_ids")
+  is_replica_copy          Boolean  @default(false) @map("is_replica_copy")
   message                  String   @map("message")
   message_hash             String   @map("message_hash")
   sender_signature         String   @map("sender_signature")
@@ -41,6 +44,18 @@ model DirectMessage {
 
   @@index([recipient_public_key, createdAt])
   @@index([expiresAt])
+}
+
+model UserPresence {
+  public_key     String   @map("public_key")
+  server_peer_id String   @map("server_peer_id")
+  observed_at    DateTime @default(now()) @map("observed_at")
+  expires_at     DateTime @map("expires_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@id([public_key, server_peer_id])
+  @@index([public_key, expires_at])
 }
 
 model ServerNode {

@@ -10,6 +10,10 @@ import { get_p2p_config } from '../../config/p2p.config';
 import { NetworkTraceService } from '../network_trace/network_trace.service';
 import {
   PEER_HELLO_PROTOCOL,
+  PEER_DM_DELETE_PROTOCOL,
+  PEER_DM_PRESENCE_PROTOCOL,
+  PEER_DM_PULL_PROTOCOL,
+  PEER_DM_REPLICATE_PROTOCOL,
   PEER_DB_SYNC_FETCH_BY_KEYS_PROTOCOL,
   PEER_DB_SYNC_FETCH_PROTOCOL,
   PEER_DB_SYNC_MANIFEST_PROTOCOL,
@@ -30,12 +34,33 @@ import {
   SyncVerifyBatchRequest,
 } from './sync/types/sync_wire.types';
 import {
+  InterServerDmCallbacks,
+  InterServerDmDeleteAckPayload,
+  InterServerDmDeleteRequestPayload,
+  InterServerDmPresenceAnnouncePayload,
+  InterServerDmPresenceQueryPayload,
+  InterServerDmPresenceResponsePayload,
+  InterServerDmPullRequestPayload,
+  InterServerDmPullResponsePayload,
+  InterServerDmReplicateAckPayload,
+  InterServerDmReplicatePayload,
+  ReplicateToPeersInput,
+  ReplicateToPeersResult,
+  SignedInterServerDmEvent,
+} from './types/inter_server_dm.types';
+import {
   create_server_score_signature,
   verify_server_score_signature,
 } from './utils/server_score_signature.util';
 import { DmDeleteGossipService } from './sync/services/dm_delete_gossip.service';
 import { StartupSyncService } from './sync/services/startup_sync.service';
 import { TableSyncRunnerService } from './sync/services/table_sync_runner.service';
+import {
+  create_inter_server_dm_signature,
+  verify_inter_server_dm_signature,
+} from './utils/inter_server_dm_signature.util';
+import { get_inter_server_dm_config } from '../../config/inter_server_dm.config';
+import { createHash, randomUUID } from 'node:crypto';
 
 type ConnectedPeerSnapshot = {
   peer_id: string;
@@ -63,6 +88,13 @@ type CandidateAggregateSnapshot = {
 
 type KeepAliveRole = 'bootstrap' | 'core';
 
+type DeleteRetryItem = {
+  attempts: number;
+  next_attempt_at_ms: number;
+  payload: InterServerDmDeleteRequestPayload;
+  peer_id: string;
+};
+
 function normalize_chunk(chunk: StreamChunk): Uint8Array {
   return chunk instanceof Uint8Array ? chunk : chunk.subarray();
 }
@@ -80,6 +112,7 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
   private static readonly KEEP_ALIVE_CORE_TAG = 'keep-alive-open-chat-core';
 
   private readonly logger = new Logger(PeerNetworkService.name);
+  private readonly inter_server_dm_config = get_inter_server_dm_config();
   private readonly p2p_config = get_p2p_config();
   private readonly local_peer_observations = new Map<
     string,
@@ -98,6 +131,13 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
   private keep_alive_redial_timer: NodeJS.Timeout | null = null;
   private keep_alive_reconcile_timer: NodeJS.Timeout | null = null;
   private keep_alive_set_signature = '';
+  private readonly inter_server_dm_event_dedupe = new Map<string, number>();
+  private readonly inter_server_dm_delete_retry_queue = new Map<
+    string,
+    DeleteRetryItem
+  >();
+  private inter_server_dm_callbacks: InterServerDmCallbacks | null = null;
+  private inter_server_dm_delete_retry_timer: NodeJS.Timeout | null = null;
   private peer_id_from_string: ((peer_id: string) => any) | null = null;
   private multiaddr_factory: ((address: string) => any) | null = null;
   private score_gossip_timer: NodeJS.Timeout | null = null;
@@ -183,6 +223,9 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
     this.register_protocol_handlers();
     this.log_node_identity();
     await this.sync_local_server_node_state(true);
+    this.inter_server_dm_delete_retry_timer = setInterval(() => {
+      void this.process_inter_server_dm_delete_retry_queue();
+    }, this.inter_server_dm_config.delete_retry_interval_ms);
 
     for (const bootstrap_address of this.p2p_config.bootstrap) {
       const normalized_address =
@@ -257,6 +300,10 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
+    if (this.inter_server_dm_delete_retry_timer) {
+      clearInterval(this.inter_server_dm_delete_retry_timer);
+    }
+
     if (this.keep_alive_reconcile_timer) {
       clearInterval(this.keep_alive_reconcile_timer);
     }
@@ -302,6 +349,338 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
       listen_addresses: topology.local_node.listen_addresses,
       local_peer_id: topology.local_node.peer_id,
     };
+  }
+
+  get_local_peer_id_value() {
+    return this.get_local_peer_id();
+  }
+
+  register_inter_server_dm_callbacks(callbacks: InterServerDmCallbacks) {
+    this.inter_server_dm_callbacks = callbacks;
+  }
+
+  async select_replica_peer_ids_for_user(
+    public_key: string,
+    count = this.inter_server_dm_config.replica_remote_count,
+  ) {
+    const normalized_count = Math.max(0, Math.trunc(count));
+
+    if (normalized_count === 0) {
+      return [] as string[];
+    }
+
+    const closest_peer_ids = await this.get_closest_peer_ids_for_key(
+      public_key,
+      Math.max(normalized_count * 3, normalized_count + 3),
+    );
+    const local_peer_id = this.get_local_peer_id();
+    const selected_peer_ids: string[] = [];
+
+    for (const peer_id of closest_peer_ids) {
+      if (
+        peer_id === local_peer_id ||
+        peer_id === 'unknown_peer' ||
+        selected_peer_ids.includes(peer_id)
+      ) {
+        continue;
+      }
+
+      selected_peer_ids.push(peer_id);
+
+      if (selected_peer_ids.length >= normalized_count) {
+        break;
+      }
+    }
+
+    return selected_peer_ids;
+  }
+
+  async replicate_direct_message_to_peers(
+    input: ReplicateToPeersInput,
+  ): Promise<ReplicateToPeersResult> {
+    const unique_peer_ids = Array.from(
+      new Set(
+        input.peer_ids.filter(
+          (peer_id) =>
+            peer_id &&
+            peer_id !== 'unknown_peer' &&
+            peer_id !== this.get_local_peer_id(),
+        ),
+      ),
+    );
+    const acknowledged_peer_ids: string[] = [];
+    const failed_peer_ids: string[] = [];
+
+    for (const peer_id of unique_peer_ids) {
+      try {
+        const response = await this.request_signed_inter_server_dm_event<
+          InterServerDmReplicatePayload,
+          InterServerDmReplicateAckPayload
+        >(
+          peer_id,
+          PEER_DM_REPLICATE_PROTOCOL,
+          'dm.replicate.request',
+          {
+            ...input.payload,
+            replica_peer_ids: Array.from(
+              new Set(input.payload.replica_peer_ids ?? []),
+            ),
+          },
+          'dm.replicate.ack',
+        );
+
+        if (response?.stored) {
+          acknowledged_peer_ids.push(peer_id);
+          continue;
+        }
+
+        failed_peer_ids.push(peer_id);
+      } catch (error) {
+        failed_peer_ids.push(peer_id);
+        this.trace_event(
+          'p2p.dm_replicate_failed',
+          'warn',
+          {
+            error: error instanceof Error ? error.message : String(error),
+          },
+          peer_id,
+        );
+      }
+    }
+
+    const quorum_target = Math.min(
+      this.inter_server_dm_config.replica_remote_quorum,
+      Math.max(1, unique_peer_ids.length),
+    );
+    const quorum_met =
+      !input.require_quorum || acknowledged_peer_ids.length >= quorum_target;
+
+    this.trace_event('p2p.dm_replicate_result', 'info', {
+      acknowledged_count: acknowledged_peer_ids.length,
+      failed_count: failed_peer_ids.length,
+      quorum_met,
+      quorum_target,
+      require_quorum: input.require_quorum,
+    });
+
+    return {
+      acknowledged_peer_ids,
+      failed_peer_ids,
+      quorum_met,
+    };
+  }
+
+  async announce_user_presence(public_key: string, replica_peer_ids?: string[]) {
+    await this.cleanup_expired_presence_records();
+
+    const local_peer_id = this.get_local_peer_id();
+    const expires_at = new Date(
+      Date.now() + this.inter_server_dm_config.presence_ttl_ms,
+    );
+
+    await this.prisma_service.userPresence.upsert({
+      where: {
+        public_key_server_peer_id: {
+          public_key,
+          server_peer_id: local_peer_id,
+        },
+      },
+      update: {
+        expires_at,
+        observed_at: new Date(),
+      },
+      create: {
+        expires_at,
+        public_key,
+        server_peer_id: local_peer_id,
+      },
+    });
+
+    const targets = Array.from(
+      new Set(
+        (replica_peer_ids ?? []).filter(
+          (peer_id) => peer_id && peer_id !== local_peer_id,
+        ),
+      ),
+    );
+    const payload: InterServerDmPresenceAnnouncePayload = {
+      expires_at: expires_at.toISOString(),
+      public_key,
+      server_peer_id: local_peer_id,
+    };
+
+    await Promise.all(
+      targets.map(async (peer_id) => {
+        try {
+          await this.request_signed_inter_server_dm_event<
+            InterServerDmPresenceAnnouncePayload,
+            { accepted: boolean }
+          >(
+            peer_id,
+            PEER_DM_PRESENCE_PROTOCOL,
+            'dm.presence.announce',
+            payload,
+            'dm.presence.ack',
+          );
+        } catch (error) {
+          this.trace_event(
+            'p2p.dm_presence_announce_failed',
+            'warn',
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+            peer_id,
+          );
+        }
+      }),
+    );
+  }
+
+  async query_user_presence(public_key: string, replica_peer_ids?: string[]) {
+    await this.cleanup_expired_presence_records();
+
+    const local_presence = await this.prisma_service.userPresence.findMany({
+      where: {
+        expires_at: {
+          gt: new Date(),
+        },
+        public_key,
+      },
+      select: {
+        server_peer_id: true,
+      },
+    });
+    const online_server_peer_ids = new Set(
+      local_presence.map((presence) => presence.server_peer_id),
+    );
+    const targets = Array.from(
+      new Set((replica_peer_ids ?? []).filter((peer_id) => Boolean(peer_id))),
+    );
+
+    await Promise.all(
+      targets.map(async (peer_id) => {
+        try {
+          const response = await this.request_signed_inter_server_dm_event<
+            InterServerDmPresenceQueryPayload,
+            InterServerDmPresenceResponsePayload
+          >(
+            peer_id,
+            PEER_DM_PRESENCE_PROTOCOL,
+            'dm.presence.query',
+            {
+              public_key,
+            },
+            'dm.presence.response',
+          );
+
+          for (const server_peer_id of response.online_server_peer_ids) {
+            if (server_peer_id) {
+              online_server_peer_ids.add(server_peer_id);
+            }
+          }
+        } catch (error) {
+          this.trace_event(
+            'p2p.dm_presence_query_failed',
+            'warn',
+            {
+              error: error instanceof Error ? error.message : String(error),
+              public_key,
+            },
+            peer_id,
+          );
+        }
+      }),
+    );
+
+    return {
+      online_server_peer_ids: Array.from(online_server_peer_ids),
+      public_key,
+    };
+  }
+
+  async pull_pending_messages_from_replicas(
+    public_key: string,
+    replica_peer_ids: string[],
+  ) {
+    const items_by_id = new Map<string, InterServerDmReplicatePayload>();
+    const targets = Array.from(
+      new Set(
+        replica_peer_ids.filter(
+          (peer_id) => peer_id && peer_id !== this.get_local_peer_id(),
+        ),
+      ),
+    );
+
+    for (const peer_id of targets) {
+      let cursor: string | null = null;
+
+      while (true) {
+        try {
+          const response = await this.request_signed_inter_server_dm_event<
+            InterServerDmPullRequestPayload,
+            InterServerDmPullResponsePayload
+          >(
+            peer_id,
+            PEER_DM_PULL_PROTOCOL,
+            'dm.pull.request',
+            {
+              cursor,
+              limit: this.inter_server_dm_config.pull_batch_size,
+              public_key,
+            },
+            'dm.pull.response',
+          );
+
+          for (const item of response.items) {
+            if (item?.id && !items_by_id.has(item.id)) {
+              items_by_id.set(item.id, item);
+            }
+          }
+
+          if (!response.next_cursor) {
+            break;
+          }
+
+          cursor = response.next_cursor;
+        } catch (error) {
+          this.trace_event(
+            'p2p.dm_pull_failed',
+            'warn',
+            {
+              error: error instanceof Error ? error.message : String(error),
+              public_key,
+            },
+            peer_id,
+          );
+          break;
+        }
+      }
+    }
+
+    return Array.from(items_by_id.values());
+  }
+
+  async send_targeted_dm_delete(input: InterServerDmDeleteRequestPayload) {
+    const target_peer_ids = Array.from(
+      new Set([
+        input.origin_server_peer_id,
+        ...(input.replica_peer_ids ?? []),
+      ]).values(),
+    ).filter((peer_id) => Boolean(peer_id) && peer_id !== 'unknown_peer');
+
+    await Promise.all(
+      target_peer_ids.map(async (peer_id) => {
+        if (!peer_id) {
+          return;
+        }
+
+        const success = await this.send_dm_delete_request_to_peer(peer_id, input);
+
+        if (!success) {
+          this.enqueue_dm_delete_retry(peer_id, input, 0);
+        }
+      }),
+    );
   }
 
   async get_candidates(limit?: number, max_report_age_sec?: number) {
@@ -726,6 +1105,271 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
             type: 'dm.delete.gossip.ack',
           }),
         );
+      },
+    );
+
+    this.libp2p_node.handle(
+      PEER_DM_REPLICATE_PROTOCOL,
+      async (stream: any, connection: any) => {
+        const sender_peer_id =
+          connection?.remotePeer?.toString?.() ?? 'unknown_peer';
+        const payload_text = await this.read_stream_payload(stream);
+        const signed_event = this.parse_json(payload_text) as
+          | SignedInterServerDmEvent<unknown>
+          | null;
+
+        const parsed_event = await this.verify_and_extract_signed_inter_server_dm_event(
+          signed_event,
+          sender_peer_id,
+          'dm.replicate.request',
+        );
+
+        if (!parsed_event) {
+          return;
+        }
+
+        if (
+          !this.should_process_inter_server_dm_event(
+            parsed_event.event.event_id,
+            'dm.replicate.request',
+          )
+        ) {
+          const duplicate_response = await this.create_signed_inter_server_dm_event(
+            'dm.replicate.ack',
+            {
+              id: (parsed_event.payload as any).id ?? '',
+              stored: true,
+            } satisfies InterServerDmReplicateAckPayload,
+          );
+          await this.write_stream_payload(
+            stream,
+            JSON.stringify(duplicate_response),
+          );
+          return;
+        }
+
+        const replicate_payload = this.parse_inter_server_dm_replicate_payload(
+          parsed_event.payload,
+        );
+        const replicate_response =
+          await this.inter_server_dm_callbacks?.on_replicate_request(
+            replicate_payload,
+            sender_peer_id,
+          );
+        const response = await this.create_signed_inter_server_dm_event(
+          'dm.replicate.ack',
+          replicate_response ?? {
+            id: replicate_payload.id,
+            stored: false,
+          },
+        );
+
+        await this.write_stream_payload(stream, JSON.stringify(response));
+      },
+    );
+
+    this.libp2p_node.handle(
+      PEER_DM_PRESENCE_PROTOCOL,
+      async (stream: any, connection: any) => {
+        const sender_peer_id =
+          connection?.remotePeer?.toString?.() ?? 'unknown_peer';
+        const payload_text = await this.read_stream_payload(stream);
+        const signed_event = this.parse_json(payload_text) as
+          | SignedInterServerDmEvent<unknown>
+          | null;
+
+        const parsed_event = await this.verify_and_extract_signed_inter_server_dm_event(
+          signed_event,
+          sender_peer_id,
+        );
+
+        if (!parsed_event) {
+          return;
+        }
+
+        if (parsed_event.event.type === 'dm.presence.announce') {
+          const presence_payload = this.parse_inter_server_dm_presence_announce_payload(
+            parsed_event.payload,
+          );
+
+          if (
+            this.should_process_inter_server_dm_event(
+              parsed_event.event.event_id,
+              'dm.presence.announce',
+            )
+          ) {
+            await this.prisma_service.userPresence.upsert({
+              where: {
+                public_key_server_peer_id: {
+                  public_key: presence_payload.public_key,
+                  server_peer_id: presence_payload.server_peer_id,
+                },
+              },
+              update: {
+                expires_at: new Date(presence_payload.expires_at),
+                observed_at: new Date(),
+              },
+              create: {
+                expires_at: new Date(presence_payload.expires_at),
+                public_key: presence_payload.public_key,
+                server_peer_id: presence_payload.server_peer_id,
+              },
+            });
+          }
+
+          const response = await this.create_signed_inter_server_dm_event(
+            'dm.presence.ack',
+            {
+              accepted: true,
+            },
+          );
+          await this.write_stream_payload(stream, JSON.stringify(response));
+          return;
+        }
+
+        if (parsed_event.event.type === 'dm.presence.query') {
+          const presence_query_payload = this.parse_inter_server_dm_presence_query_payload(
+            parsed_event.payload,
+          );
+
+          await this.cleanup_expired_presence_records();
+
+          const presence_rows = await this.prisma_service.userPresence.findMany({
+            where: {
+              expires_at: {
+                gt: new Date(),
+              },
+              public_key: presence_query_payload.public_key,
+            },
+            select: {
+              server_peer_id: true,
+            },
+          });
+          const response_payload: InterServerDmPresenceResponsePayload = {
+            online_server_peer_ids: presence_rows.map(
+              (presence_row) => presence_row.server_peer_id,
+            ),
+            public_key: presence_query_payload.public_key,
+          };
+          const response = await this.create_signed_inter_server_dm_event(
+            'dm.presence.response',
+            response_payload,
+          );
+
+          await this.write_stream_payload(stream, JSON.stringify(response));
+          return;
+        }
+
+        this.trace_event(
+          'p2p.dm_presence_rejected',
+          'warn',
+          {
+            reason: `Unsupported presence event type: ${parsed_event.event.type}`,
+          },
+          sender_peer_id,
+        );
+      },
+    );
+
+    this.libp2p_node.handle(
+      PEER_DM_PULL_PROTOCOL,
+      async (stream: any, connection: any) => {
+        const sender_peer_id =
+          connection?.remotePeer?.toString?.() ?? 'unknown_peer';
+        const payload_text = await this.read_stream_payload(stream);
+        const signed_event = this.parse_json(payload_text) as
+          | SignedInterServerDmEvent<unknown>
+          | null;
+
+        const parsed_event = await this.verify_and_extract_signed_inter_server_dm_event(
+          signed_event,
+          sender_peer_id,
+          'dm.pull.request',
+        );
+
+        if (!parsed_event) {
+          return;
+        }
+
+        const pull_payload = this.parse_inter_server_dm_pull_request_payload(
+          parsed_event.payload,
+        );
+        const pull_response =
+          await this.inter_server_dm_callbacks?.on_pull_request(
+            pull_payload,
+            sender_peer_id,
+          );
+        const response = await this.create_signed_inter_server_dm_event(
+          'dm.pull.response',
+          pull_response ?? {
+            items: [],
+            next_cursor: null,
+            public_key: pull_payload.public_key,
+          },
+        );
+
+        await this.write_stream_payload(stream, JSON.stringify(response));
+      },
+    );
+
+    this.libp2p_node.handle(
+      PEER_DM_DELETE_PROTOCOL,
+      async (stream: any, connection: any) => {
+        const sender_peer_id =
+          connection?.remotePeer?.toString?.() ?? 'unknown_peer';
+        const payload_text = await this.read_stream_payload(stream);
+        const signed_event = this.parse_json(payload_text) as
+          | SignedInterServerDmEvent<unknown>
+          | null;
+
+        const parsed_event = await this.verify_and_extract_signed_inter_server_dm_event(
+          signed_event,
+          sender_peer_id,
+          'dm.delete.request',
+        );
+
+        if (!parsed_event) {
+          return;
+        }
+
+        const delete_payload = this.parse_inter_server_dm_delete_request_payload(
+          parsed_event.payload,
+        );
+
+        if (
+          !this.should_process_inter_server_dm_event(
+            parsed_event.event.event_id,
+            'dm.delete.request',
+          )
+        ) {
+          const duplicate_response = await this.create_signed_inter_server_dm_event(
+            'dm.delete.ack',
+            {
+              deleted: true,
+              message_id: delete_payload.message_id,
+            } satisfies InterServerDmDeleteAckPayload,
+          );
+          await this.write_stream_payload(
+            stream,
+            JSON.stringify(duplicate_response),
+          );
+          return;
+        }
+
+        const delete_response =
+          await this.inter_server_dm_callbacks?.on_delete_request(
+            delete_payload,
+            sender_peer_id,
+          );
+        const response = await this.create_signed_inter_server_dm_event(
+          'dm.delete.ack',
+          delete_response ?? {
+            deleted: false,
+            message_id: delete_payload.message_id,
+          },
+        );
+
+        await this.write_stream_payload(stream, JSON.stringify(response));
       },
     );
 
@@ -1575,6 +2219,27 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  private async open_peer_protocol_stream_for_peer_id(
+    peer_id: string,
+    protocol: string,
+  ) {
+    const existing_connection = this.get_connected_peer_connection(peer_id);
+
+    if (existing_connection) {
+      return this.open_peer_protocol_stream(existing_connection, protocol);
+    }
+
+    const peer_id_object = this.parse_peer_id(peer_id);
+
+    if (!peer_id_object) {
+      throw new Error(`Unable to parse peer id: ${peer_id}`);
+    }
+
+    const connection = await this.libp2p_node.dial(peer_id_object);
+
+    return this.open_peer_protocol_stream(connection, protocol);
+  }
+
   private extract_protocol_stream(result: any) {
     if (result?.sink && result?.source) {
       return result;
@@ -1677,6 +2342,44 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
     }
 
     return parsed_payload;
+  }
+
+  private async request_peer_protocol_json_for_peer_id(
+    peer_id: string,
+    protocol: string,
+    payload: unknown,
+    timeout_ms = this.inter_server_dm_config.p2p_request_timeout_ms,
+  ) {
+    const request_promise = (async () => {
+      const stream = await this.open_peer_protocol_stream_for_peer_id(
+        peer_id,
+        protocol,
+      );
+
+      await this.write_stream_payload(stream, JSON.stringify(payload));
+
+      const response_text = await this.read_stream_payload(stream);
+      const parsed_payload = this.parse_json(response_text);
+
+      if (parsed_payload == null) {
+        throw new Error(
+          `Failed to parse protocol response from peer ${peer_id} on ${protocol}.`,
+        );
+      }
+
+      return parsed_payload;
+    })();
+    const timeout_promise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(
+          new Error(
+            `Peer protocol request timed out after ${timeout_ms}ms for ${peer_id} on ${protocol}.`,
+          ),
+        );
+      }, timeout_ms);
+    });
+
+    return Promise.race([request_promise, timeout_promise]);
   }
 
   private async broadcast_dm_delete_gossip_event(
@@ -2666,6 +3369,528 @@ export class PeerNetworkService implements OnModuleInit, OnModuleDestroy {
     return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString(
       'utf8',
     );
+  }
+
+  private async cleanup_expired_presence_records() {
+    await this.prisma_service.userPresence.deleteMany({
+      where: {
+        expires_at: {
+          lte: new Date(),
+        },
+      },
+    });
+  }
+
+  private async create_signed_inter_server_dm_event<Payload>(
+    type: string,
+    payload: Payload,
+  ): Promise<SignedInterServerDmEvent<Payload>> {
+    const unsigned_event = {
+      event_id: randomUUID(),
+      origin_peer_id: this.get_local_peer_id(),
+      payload,
+      server_public_key: (
+        await this.server_identity_service.get_public_key()
+      ).public_key,
+      timestamp: new Date().toISOString(),
+      type,
+    };
+    const { signature } = await create_inter_server_dm_signature({
+      event: unsigned_event,
+      sign_message: async (message) =>
+        this.server_identity_service.sign_message(message),
+    });
+
+    return {
+      ...unsigned_event,
+      server_signature: signature,
+    };
+  }
+
+  private async verify_and_extract_signed_inter_server_dm_event(
+    event: SignedInterServerDmEvent<unknown> | null,
+    source_peer_id: string,
+    expected_type?: string,
+  ) {
+    if (!event || typeof event !== 'object') {
+      this.trace_event(
+        'p2p.inter_server_dm_event_rejected',
+        'warn',
+        {
+          reason: 'Signed inter-server event payload is missing.',
+        },
+        source_peer_id,
+      );
+      return null;
+    }
+
+    if (!this.is_peer_directly_connected(source_peer_id)) {
+      this.trace_event(
+        'p2p.inter_server_dm_event_rejected',
+        'warn',
+        {
+          reason: 'Source peer is not directly connected.',
+        },
+        source_peer_id,
+      );
+      return null;
+    }
+
+    if (expected_type && event.type !== expected_type) {
+      this.trace_event(
+        'p2p.inter_server_dm_event_rejected',
+        'warn',
+        {
+          expected_type,
+          received_type: event.type,
+          reason: 'Unexpected inter-server event type.',
+        },
+        source_peer_id,
+      );
+      return null;
+    }
+
+    if (event.origin_peer_id !== source_peer_id) {
+      this.trace_event(
+        'p2p.inter_server_dm_event_rejected',
+        'warn',
+        {
+          origin_peer_id: event.origin_peer_id,
+          reason: 'Signed inter-server event origin peer mismatch.',
+        },
+        source_peer_id,
+      );
+      return null;
+    }
+
+    const is_signature_valid = await verify_inter_server_dm_signature(event);
+
+    if (!is_signature_valid) {
+      this.trace_event(
+        'p2p.inter_server_dm_event_rejected',
+        'warn',
+        {
+          reason: 'Inter-server event signature verification failed.',
+          type: event.type,
+        },
+        source_peer_id,
+      );
+      return null;
+    }
+
+    return {
+      event,
+      payload: event.payload,
+    };
+  }
+
+  private async request_signed_inter_server_dm_event<
+    Payload,
+    ResponsePayload,
+  >(
+    peer_id: string,
+    protocol: string,
+    request_type: string,
+    payload: Payload,
+    expected_response_type?: string,
+  ) {
+    const request_event = await this.create_signed_inter_server_dm_event(
+      request_type,
+      payload,
+    );
+    const response =
+      await this.request_peer_protocol_json_for_peer_id(
+        peer_id,
+        protocol,
+        request_event,
+        this.inter_server_dm_config.p2p_request_timeout_ms,
+      );
+    const parsed_response =
+      await this.verify_and_extract_signed_inter_server_dm_event(
+        response as SignedInterServerDmEvent<unknown>,
+        peer_id,
+        expected_response_type,
+      );
+
+    if (!parsed_response) {
+      throw new Error(
+        `Peer ${peer_id} returned an invalid signed inter-server response for ${request_type}.`,
+      );
+    }
+
+    return parsed_response.payload as ResponsePayload;
+  }
+
+  private parse_inter_server_dm_replicate_payload(
+    value: unknown,
+  ): InterServerDmReplicatePayload {
+    if (typeof value !== 'object' || value == null) {
+      throw new Error('Invalid dm.replicate payload.');
+    }
+
+    const payload = value as Record<string, unknown>;
+
+    return {
+      algorithm: String(payload.algorithm ?? ''),
+      id: String(payload.id ?? ''),
+      message: String(payload.message ?? ''),
+      message_hash: String(payload.message_hash ?? ''),
+      origin_server_peer_id: String(payload.origin_server_peer_id ?? ''),
+      recipient_public_key: String(payload.recipient_public_key ?? ''),
+      replica_peer_ids: Array.isArray(payload.replica_peer_ids)
+        ? payload.replica_peer_ids
+            .filter((item): item is string => typeof item === 'string')
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : [],
+      send_time: String(payload.send_time ?? ''),
+      sender_public_key: String(payload.sender_public_key ?? ''),
+      sender_signature: String(payload.sender_signature ?? ''),
+      sender_x25519_public_key: String(payload.sender_x25519_public_key ?? ''),
+    };
+  }
+
+  private parse_inter_server_dm_presence_announce_payload(
+    value: unknown,
+  ): InterServerDmPresenceAnnouncePayload {
+    if (typeof value !== 'object' || value == null) {
+      throw new Error('Invalid dm.presence.announce payload.');
+    }
+
+    const payload = value as Record<string, unknown>;
+
+    return {
+      expires_at: String(payload.expires_at ?? ''),
+      public_key: String(payload.public_key ?? ''),
+      server_peer_id: String(payload.server_peer_id ?? ''),
+    };
+  }
+
+  private parse_inter_server_dm_presence_query_payload(
+    value: unknown,
+  ): InterServerDmPresenceQueryPayload {
+    if (typeof value !== 'object' || value == null) {
+      throw new Error('Invalid dm.presence.query payload.');
+    }
+
+    const payload = value as Record<string, unknown>;
+
+    return {
+      public_key: String(payload.public_key ?? ''),
+    };
+  }
+
+  private parse_inter_server_dm_pull_request_payload(
+    value: unknown,
+  ): InterServerDmPullRequestPayload {
+    if (typeof value !== 'object' || value == null) {
+      throw new Error('Invalid dm.pull.request payload.');
+    }
+
+    const payload = value as Record<string, unknown>;
+
+    return {
+      cursor:
+        typeof payload.cursor === 'string'
+          ? payload.cursor
+          : payload.cursor === null
+            ? null
+            : undefined,
+      limit: Math.max(
+        1,
+        Math.trunc(
+          typeof payload.limit === 'number'
+            ? payload.limit
+            : this.inter_server_dm_config.pull_batch_size,
+        ),
+      ),
+      public_key: String(payload.public_key ?? ''),
+    };
+  }
+
+  private parse_inter_server_dm_delete_request_payload(
+    value: unknown,
+  ): InterServerDmDeleteRequestPayload {
+    if (typeof value !== 'object' || value == null) {
+      throw new Error('Invalid dm.delete.request payload.');
+    }
+
+    const payload = value as Record<string, unknown>;
+
+    return {
+      message_id: String(payload.message_id ?? ''),
+      origin_server_peer_id: String(payload.origin_server_peer_id ?? ''),
+      recipient_public_key: String(payload.recipient_public_key ?? ''),
+      replica_peer_ids: Array.isArray(payload.replica_peer_ids)
+        ? payload.replica_peer_ids
+            .filter((item): item is string => typeof item === 'string')
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : [],
+    };
+  }
+
+  private should_process_inter_server_dm_event(event_id: string, type: string) {
+    this.cleanup_inter_server_dm_event_dedupe();
+
+    const dedupe_key = `${type}:${event_id}`;
+
+    if (this.inter_server_dm_event_dedupe.has(dedupe_key)) {
+      return false;
+    }
+
+    this.inter_server_dm_event_dedupe.set(
+      dedupe_key,
+      Date.now() + this.p2p_config.sync_dedupe_ttl_seconds * 1000,
+    );
+
+    return true;
+  }
+
+  private cleanup_inter_server_dm_event_dedupe() {
+    const now_ms = Date.now();
+
+    for (const [
+      dedupe_key,
+      expires_at_ms,
+    ] of this.inter_server_dm_event_dedupe.entries()) {
+      if (expires_at_ms <= now_ms) {
+        this.inter_server_dm_event_dedupe.delete(dedupe_key);
+      }
+    }
+  }
+
+  private async send_dm_delete_request_to_peer(
+    peer_id: string,
+    payload: InterServerDmDeleteRequestPayload,
+  ) {
+    if (peer_id === this.get_local_peer_id()) {
+      try {
+        const response = await this.inter_server_dm_callbacks?.on_delete_request(
+          payload,
+          peer_id,
+        );
+        return response?.deleted === true;
+      } catch (error) {
+        this.trace_event(
+          'p2p.dm_delete_request_failed',
+          'warn',
+          {
+            error: error instanceof Error ? error.message : String(error),
+          },
+          peer_id,
+        );
+        return false;
+      }
+    }
+
+    try {
+      const response = await this.request_signed_inter_server_dm_event<
+        InterServerDmDeleteRequestPayload,
+        InterServerDmDeleteAckPayload
+      >(
+        peer_id,
+        PEER_DM_DELETE_PROTOCOL,
+        'dm.delete.request',
+        payload,
+        'dm.delete.ack',
+      );
+
+      return response.deleted === true;
+    } catch (error) {
+      this.trace_event(
+        'p2p.dm_delete_request_failed',
+        'warn',
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+        peer_id,
+      );
+      return false;
+    }
+  }
+
+  private enqueue_dm_delete_retry(
+    peer_id: string,
+    payload: InterServerDmDeleteRequestPayload,
+    attempts: number,
+  ) {
+    const queue_key = `${payload.message_id}:${peer_id}`;
+
+    this.inter_server_dm_delete_retry_queue.set(queue_key, {
+      attempts,
+      next_attempt_at_ms:
+        Date.now() + this.inter_server_dm_config.delete_retry_interval_ms,
+      payload,
+      peer_id,
+    });
+  }
+
+  private async process_inter_server_dm_delete_retry_queue() {
+    if (this.inter_server_dm_delete_retry_queue.size === 0) {
+      return;
+    }
+
+    const now_ms = Date.now();
+
+    for (const [queue_key, item] of this.inter_server_dm_delete_retry_queue) {
+      if (item.next_attempt_at_ms > now_ms) {
+        continue;
+      }
+
+      const success = await this.send_dm_delete_request_to_peer(
+        item.peer_id,
+        item.payload,
+      );
+
+      if (success) {
+        this.inter_server_dm_delete_retry_queue.delete(queue_key);
+        continue;
+      }
+
+      const next_attempts = item.attempts + 1;
+
+      if (next_attempts >= this.inter_server_dm_config.delete_max_retries) {
+        this.inter_server_dm_delete_retry_queue.delete(queue_key);
+        this.trace_event(
+          'p2p.dm_delete_retry_exhausted',
+          'warn',
+          {
+            attempts: next_attempts,
+            message_id: item.payload.message_id,
+          },
+          item.peer_id,
+        );
+        continue;
+      }
+
+      this.inter_server_dm_delete_retry_queue.set(queue_key, {
+        ...item,
+        attempts: next_attempts,
+        next_attempt_at_ms:
+          now_ms + this.inter_server_dm_config.delete_retry_interval_ms,
+      });
+    }
+  }
+
+  private async get_closest_peer_ids_for_key(key: string, count: number) {
+    const local_peer_id = this.get_local_peer_id();
+    const candidate_peer_ids = new Set<string>();
+
+    for (const peer of this.get_connected_peers()) {
+      if (peer.peer_id && peer.peer_id !== local_peer_id) {
+        candidate_peer_ids.add(peer.peer_id);
+      }
+    }
+
+    const server_nodes = await this.prisma_service.serverNode.findMany({
+      where: {
+        is_active: true,
+      },
+      orderBy: {
+        last_seen_at: 'desc',
+      },
+      take: Math.max(50, count * 6),
+    });
+
+    for (const server_node of server_nodes) {
+      if (server_node.peer_id && server_node.peer_id !== local_peer_id) {
+        candidate_peer_ids.add(server_node.peer_id);
+      }
+    }
+
+    const dht_peer_ids = await this.collect_dht_closest_peer_ids(key, count);
+
+    for (const peer_id of dht_peer_ids) {
+      if (peer_id && peer_id !== local_peer_id) {
+        candidate_peer_ids.add(peer_id);
+      }
+    }
+
+    return this.sort_peer_ids_by_key_distance(Array.from(candidate_peer_ids), key);
+  }
+
+  private async collect_dht_closest_peer_ids(key: string, count: number) {
+    const dht = this.libp2p_node?.services?.dht;
+
+    if (!dht || typeof dht.getClosestPeers !== 'function') {
+      return [] as string[];
+    }
+
+    const key_hash = createHash('sha256').update(key).digest();
+    const peer_ids = new Set<string>();
+
+    try {
+      for await (const event of dht.getClosestPeers(key_hash)) {
+        const event_name = (event as any)?.name;
+
+        if (event_name === 'FINAL_PEER') {
+          const peer_id = (event as any)?.peer?.id?.toString?.();
+
+          if (peer_id) {
+            peer_ids.add(peer_id);
+          }
+        }
+
+        if (event_name === 'PEER_RESPONSE') {
+          const closer = (event as any)?.closer;
+
+          if (Array.isArray(closer)) {
+            for (const peer of closer) {
+              const peer_id = peer?.id?.toString?.();
+
+              if (peer_id) {
+                peer_ids.add(peer_id);
+              }
+            }
+          }
+        }
+
+        if (peer_ids.size >= Math.max(count * 3, count + 3)) {
+          break;
+        }
+      }
+    } catch (error) {
+      this.trace_event('p2p.dm_dht_lookup_failed', 'warn', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    return Array.from(peer_ids);
+  }
+
+  private sort_peer_ids_by_key_distance(peer_ids: string[], key: string) {
+    const key_hash = createHash('sha256').update(key).digest();
+
+    return [...peer_ids]
+      .map((peer_id) => ({
+        distance_hex: this.create_xor_distance_hex(
+          key_hash,
+          createHash('sha256').update(peer_id).digest(),
+        ),
+        peer_id,
+      }))
+      .sort((left, right) => {
+        if (left.distance_hex !== right.distance_hex) {
+          return left.distance_hex.localeCompare(right.distance_hex);
+        }
+
+        return left.peer_id.localeCompare(right.peer_id);
+      })
+      .map((item) => item.peer_id);
+  }
+
+  private create_xor_distance_hex(left: Buffer, right: Buffer) {
+    const max_length = Math.max(left.length, right.length);
+    const out = Buffer.alloc(max_length);
+
+    for (let index = 0; index < max_length; index += 1) {
+      const left_byte = left[index] ?? 0;
+      const right_byte = right[index] ?? 0;
+      out[index] = left_byte ^ right_byte;
+    }
+
+    return out.toString('hex');
   }
 
   private parse_listen_addresses(value: unknown): string[] {

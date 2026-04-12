@@ -29,6 +29,8 @@ export type DirectMessageMinAggregateOutputType = {
   sender_public_key: string | null
   sender_x25519_public_key: string | null
   recipient_public_key: string | null
+  origin_server_peer_id: string | null
+  is_replica_copy: boolean | null
   message: string | null
   message_hash: string | null
   sender_signature: string | null
@@ -43,6 +45,8 @@ export type DirectMessageMaxAggregateOutputType = {
   sender_public_key: string | null
   sender_x25519_public_key: string | null
   recipient_public_key: string | null
+  origin_server_peer_id: string | null
+  is_replica_copy: boolean | null
   message: string | null
   message_hash: string | null
   sender_signature: string | null
@@ -57,6 +61,9 @@ export type DirectMessageCountAggregateOutputType = {
   sender_public_key: number
   sender_x25519_public_key: number
   recipient_public_key: number
+  origin_server_peer_id: number
+  replica_peer_ids: number
+  is_replica_copy: number
   message: number
   message_hash: number
   sender_signature: number
@@ -73,6 +80,8 @@ export type DirectMessageMinAggregateInputType = {
   sender_public_key?: true
   sender_x25519_public_key?: true
   recipient_public_key?: true
+  origin_server_peer_id?: true
+  is_replica_copy?: true
   message?: true
   message_hash?: true
   sender_signature?: true
@@ -87,6 +96,8 @@ export type DirectMessageMaxAggregateInputType = {
   sender_public_key?: true
   sender_x25519_public_key?: true
   recipient_public_key?: true
+  origin_server_peer_id?: true
+  is_replica_copy?: true
   message?: true
   message_hash?: true
   sender_signature?: true
@@ -101,6 +112,9 @@ export type DirectMessageCountAggregateInputType = {
   sender_public_key?: true
   sender_x25519_public_key?: true
   recipient_public_key?: true
+  origin_server_peer_id?: true
+  replica_peer_ids?: true
+  is_replica_copy?: true
   message?: true
   message_hash?: true
   sender_signature?: true
@@ -188,6 +202,9 @@ export type DirectMessageGroupByOutputType = {
   sender_public_key: string
   sender_x25519_public_key: string
   recipient_public_key: string
+  origin_server_peer_id: string | null
+  replica_peer_ids: runtime.JsonValue | null
+  is_replica_copy: boolean
   message: string
   message_hash: string
   sender_signature: string
@@ -223,6 +240,9 @@ export type DirectMessageWhereInput = {
   sender_public_key?: Prisma.StringFilter<"DirectMessage"> | string
   sender_x25519_public_key?: Prisma.StringFilter<"DirectMessage"> | string
   recipient_public_key?: Prisma.StringFilter<"DirectMessage"> | string
+  origin_server_peer_id?: Prisma.StringNullableFilter<"DirectMessage"> | string | null
+  replica_peer_ids?: Prisma.JsonNullableFilter<"DirectMessage">
+  is_replica_copy?: Prisma.BoolFilter<"DirectMessage"> | boolean
   message?: Prisma.StringFilter<"DirectMessage"> | string
   message_hash?: Prisma.StringFilter<"DirectMessage"> | string
   sender_signature?: Prisma.StringFilter<"DirectMessage"> | string
@@ -237,6 +257,9 @@ export type DirectMessageOrderByWithRelationInput = {
   sender_public_key?: Prisma.SortOrder
   sender_x25519_public_key?: Prisma.SortOrder
   recipient_public_key?: Prisma.SortOrder
+  origin_server_peer_id?: Prisma.SortOrderInput | Prisma.SortOrder
+  replica_peer_ids?: Prisma.SortOrderInput | Prisma.SortOrder
+  is_replica_copy?: Prisma.SortOrder
   message?: Prisma.SortOrder
   message_hash?: Prisma.SortOrder
   sender_signature?: Prisma.SortOrder
@@ -254,6 +277,9 @@ export type DirectMessageWhereUniqueInput = Prisma.AtLeast<{
   sender_public_key?: Prisma.StringFilter<"DirectMessage"> | string
   sender_x25519_public_key?: Prisma.StringFilter<"DirectMessage"> | string
   recipient_public_key?: Prisma.StringFilter<"DirectMessage"> | string
+  origin_server_peer_id?: Prisma.StringNullableFilter<"DirectMessage"> | string | null
+  replica_peer_ids?: Prisma.JsonNullableFilter<"DirectMessage">
+  is_replica_copy?: Prisma.BoolFilter<"DirectMessage"> | boolean
   message?: Prisma.StringFilter<"DirectMessage"> | string
   message_hash?: Prisma.StringFilter<"DirectMessage"> | string
   sender_signature?: Prisma.StringFilter<"DirectMessage"> | string
@@ -268,6 +294,9 @@ export type DirectMessageOrderByWithAggregationInput = {
   sender_public_key?: Prisma.SortOrder
   sender_x25519_public_key?: Prisma.SortOrder
   recipient_public_key?: Prisma.SortOrder
+  origin_server_peer_id?: Prisma.SortOrderInput | Prisma.SortOrder
+  replica_peer_ids?: Prisma.SortOrderInput | Prisma.SortOrder
+  is_replica_copy?: Prisma.SortOrder
   message?: Prisma.SortOrder
   message_hash?: Prisma.SortOrder
   sender_signature?: Prisma.SortOrder
@@ -288,6 +317,9 @@ export type DirectMessageScalarWhereWithAggregatesInput = {
   sender_public_key?: Prisma.StringWithAggregatesFilter<"DirectMessage"> | string
   sender_x25519_public_key?: Prisma.StringWithAggregatesFilter<"DirectMessage"> | string
   recipient_public_key?: Prisma.StringWithAggregatesFilter<"DirectMessage"> | string
+  origin_server_peer_id?: Prisma.StringNullableWithAggregatesFilter<"DirectMessage"> | string | null
+  replica_peer_ids?: Prisma.JsonNullableWithAggregatesFilter<"DirectMessage">
+  is_replica_copy?: Prisma.BoolWithAggregatesFilter<"DirectMessage"> | boolean
   message?: Prisma.StringWithAggregatesFilter<"DirectMessage"> | string
   message_hash?: Prisma.StringWithAggregatesFilter<"DirectMessage"> | string
   sender_signature?: Prisma.StringWithAggregatesFilter<"DirectMessage"> | string
@@ -302,6 +334,9 @@ export type DirectMessageCreateInput = {
   sender_public_key: string
   sender_x25519_public_key: string
   recipient_public_key: string
+  origin_server_peer_id?: string | null
+  replica_peer_ids?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  is_replica_copy?: boolean
   message: string
   message_hash: string
   sender_signature: string
@@ -316,6 +351,9 @@ export type DirectMessageUncheckedCreateInput = {
   sender_public_key: string
   sender_x25519_public_key: string
   recipient_public_key: string
+  origin_server_peer_id?: string | null
+  replica_peer_ids?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  is_replica_copy?: boolean
   message: string
   message_hash: string
   sender_signature: string
@@ -330,6 +368,9 @@ export type DirectMessageUpdateInput = {
   sender_public_key?: Prisma.StringFieldUpdateOperationsInput | string
   sender_x25519_public_key?: Prisma.StringFieldUpdateOperationsInput | string
   recipient_public_key?: Prisma.StringFieldUpdateOperationsInput | string
+  origin_server_peer_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  replica_peer_ids?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  is_replica_copy?: Prisma.BoolFieldUpdateOperationsInput | boolean
   message?: Prisma.StringFieldUpdateOperationsInput | string
   message_hash?: Prisma.StringFieldUpdateOperationsInput | string
   sender_signature?: Prisma.StringFieldUpdateOperationsInput | string
@@ -344,6 +385,9 @@ export type DirectMessageUncheckedUpdateInput = {
   sender_public_key?: Prisma.StringFieldUpdateOperationsInput | string
   sender_x25519_public_key?: Prisma.StringFieldUpdateOperationsInput | string
   recipient_public_key?: Prisma.StringFieldUpdateOperationsInput | string
+  origin_server_peer_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  replica_peer_ids?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  is_replica_copy?: Prisma.BoolFieldUpdateOperationsInput | boolean
   message?: Prisma.StringFieldUpdateOperationsInput | string
   message_hash?: Prisma.StringFieldUpdateOperationsInput | string
   sender_signature?: Prisma.StringFieldUpdateOperationsInput | string
@@ -358,6 +402,9 @@ export type DirectMessageCreateManyInput = {
   sender_public_key: string
   sender_x25519_public_key: string
   recipient_public_key: string
+  origin_server_peer_id?: string | null
+  replica_peer_ids?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  is_replica_copy?: boolean
   message: string
   message_hash: string
   sender_signature: string
@@ -372,6 +419,9 @@ export type DirectMessageUpdateManyMutationInput = {
   sender_public_key?: Prisma.StringFieldUpdateOperationsInput | string
   sender_x25519_public_key?: Prisma.StringFieldUpdateOperationsInput | string
   recipient_public_key?: Prisma.StringFieldUpdateOperationsInput | string
+  origin_server_peer_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  replica_peer_ids?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  is_replica_copy?: Prisma.BoolFieldUpdateOperationsInput | boolean
   message?: Prisma.StringFieldUpdateOperationsInput | string
   message_hash?: Prisma.StringFieldUpdateOperationsInput | string
   sender_signature?: Prisma.StringFieldUpdateOperationsInput | string
@@ -386,6 +436,9 @@ export type DirectMessageUncheckedUpdateManyInput = {
   sender_public_key?: Prisma.StringFieldUpdateOperationsInput | string
   sender_x25519_public_key?: Prisma.StringFieldUpdateOperationsInput | string
   recipient_public_key?: Prisma.StringFieldUpdateOperationsInput | string
+  origin_server_peer_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  replica_peer_ids?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  is_replica_copy?: Prisma.BoolFieldUpdateOperationsInput | boolean
   message?: Prisma.StringFieldUpdateOperationsInput | string
   message_hash?: Prisma.StringFieldUpdateOperationsInput | string
   sender_signature?: Prisma.StringFieldUpdateOperationsInput | string
@@ -400,6 +453,9 @@ export type DirectMessageCountOrderByAggregateInput = {
   sender_public_key?: Prisma.SortOrder
   sender_x25519_public_key?: Prisma.SortOrder
   recipient_public_key?: Prisma.SortOrder
+  origin_server_peer_id?: Prisma.SortOrder
+  replica_peer_ids?: Prisma.SortOrder
+  is_replica_copy?: Prisma.SortOrder
   message?: Prisma.SortOrder
   message_hash?: Prisma.SortOrder
   sender_signature?: Prisma.SortOrder
@@ -414,6 +470,8 @@ export type DirectMessageMaxOrderByAggregateInput = {
   sender_public_key?: Prisma.SortOrder
   sender_x25519_public_key?: Prisma.SortOrder
   recipient_public_key?: Prisma.SortOrder
+  origin_server_peer_id?: Prisma.SortOrder
+  is_replica_copy?: Prisma.SortOrder
   message?: Prisma.SortOrder
   message_hash?: Prisma.SortOrder
   sender_signature?: Prisma.SortOrder
@@ -428,6 +486,8 @@ export type DirectMessageMinOrderByAggregateInput = {
   sender_public_key?: Prisma.SortOrder
   sender_x25519_public_key?: Prisma.SortOrder
   recipient_public_key?: Prisma.SortOrder
+  origin_server_peer_id?: Prisma.SortOrder
+  is_replica_copy?: Prisma.SortOrder
   message?: Prisma.SortOrder
   message_hash?: Prisma.SortOrder
   sender_signature?: Prisma.SortOrder
@@ -437,6 +497,10 @@ export type DirectMessageMinOrderByAggregateInput = {
   expiresAt?: Prisma.SortOrder
 }
 
+export type BoolFieldUpdateOperationsInput = {
+  set?: boolean
+}
+
 
 
 export type DirectMessageSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
@@ -444,6 +508,9 @@ export type DirectMessageSelect<ExtArgs extends runtime.Types.Extensions.Interna
   sender_public_key?: boolean
   sender_x25519_public_key?: boolean
   recipient_public_key?: boolean
+  origin_server_peer_id?: boolean
+  replica_peer_ids?: boolean
+  is_replica_copy?: boolean
   message?: boolean
   message_hash?: boolean
   sender_signature?: boolean
@@ -458,6 +525,9 @@ export type DirectMessageSelectCreateManyAndReturn<ExtArgs extends runtime.Types
   sender_public_key?: boolean
   sender_x25519_public_key?: boolean
   recipient_public_key?: boolean
+  origin_server_peer_id?: boolean
+  replica_peer_ids?: boolean
+  is_replica_copy?: boolean
   message?: boolean
   message_hash?: boolean
   sender_signature?: boolean
@@ -472,6 +542,9 @@ export type DirectMessageSelectUpdateManyAndReturn<ExtArgs extends runtime.Types
   sender_public_key?: boolean
   sender_x25519_public_key?: boolean
   recipient_public_key?: boolean
+  origin_server_peer_id?: boolean
+  replica_peer_ids?: boolean
+  is_replica_copy?: boolean
   message?: boolean
   message_hash?: boolean
   sender_signature?: boolean
@@ -486,6 +559,9 @@ export type DirectMessageSelectScalar = {
   sender_public_key?: boolean
   sender_x25519_public_key?: boolean
   recipient_public_key?: boolean
+  origin_server_peer_id?: boolean
+  replica_peer_ids?: boolean
+  is_replica_copy?: boolean
   message?: boolean
   message_hash?: boolean
   sender_signature?: boolean
@@ -495,7 +571,7 @@ export type DirectMessageSelectScalar = {
   expiresAt?: boolean
 }
 
-export type DirectMessageOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "sender_public_key" | "sender_x25519_public_key" | "recipient_public_key" | "message" | "message_hash" | "sender_signature" | "send_time" | "algorithm" | "createdAt" | "expiresAt", ExtArgs["result"]["directMessage"]>
+export type DirectMessageOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "sender_public_key" | "sender_x25519_public_key" | "recipient_public_key" | "origin_server_peer_id" | "replica_peer_ids" | "is_replica_copy" | "message" | "message_hash" | "sender_signature" | "send_time" | "algorithm" | "createdAt" | "expiresAt", ExtArgs["result"]["directMessage"]>
 
 export type $DirectMessagePayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "DirectMessage"
@@ -505,6 +581,9 @@ export type $DirectMessagePayload<ExtArgs extends runtime.Types.Extensions.Inter
     sender_public_key: string
     sender_x25519_public_key: string
     recipient_public_key: string
+    origin_server_peer_id: string | null
+    replica_peer_ids: runtime.JsonValue | null
+    is_replica_copy: boolean
     message: string
     message_hash: string
     sender_signature: string
@@ -939,6 +1018,9 @@ export interface DirectMessageFieldRefs {
   readonly sender_public_key: Prisma.FieldRef<"DirectMessage", 'String'>
   readonly sender_x25519_public_key: Prisma.FieldRef<"DirectMessage", 'String'>
   readonly recipient_public_key: Prisma.FieldRef<"DirectMessage", 'String'>
+  readonly origin_server_peer_id: Prisma.FieldRef<"DirectMessage", 'String'>
+  readonly replica_peer_ids: Prisma.FieldRef<"DirectMessage", 'Json'>
+  readonly is_replica_copy: Prisma.FieldRef<"DirectMessage", 'Boolean'>
   readonly message: Prisma.FieldRef<"DirectMessage", 'String'>
   readonly message_hash: Prisma.FieldRef<"DirectMessage", 'String'>
   readonly sender_signature: Prisma.FieldRef<"DirectMessage", 'String'>

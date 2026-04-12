@@ -162,6 +162,15 @@ export class RealtimeGateway
         },
         type: 'system.connected',
       });
+      void this.direct_message_service
+        .handle_user_connected(payload.public_key)
+        .catch((error) => {
+          this.trace_event('realtime.user_connect_sync_failed', 'warn', {
+            error: error instanceof Error ? error.message : String(error),
+            public_key: payload.public_key,
+            session_id,
+          });
+        });
       await this.realtime_delivery_service.replay_pending_for_session(session_id);
     } catch (error) {
       this.handle_auth_error(client, error);

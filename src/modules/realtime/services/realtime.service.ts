@@ -56,4 +56,15 @@ export class RealtimeService {
       }),
     );
   }
+
+  async get_active_session_ids(public_key: string) {
+    return this.realtime_session_service.get_active_session_ids(public_key);
+  }
+
+  async has_active_session(public_key: string) {
+    const session_ids =
+      await this.realtime_session_service.get_active_session_ids(public_key);
+
+    return session_ids.length > 0;
+  }
 }

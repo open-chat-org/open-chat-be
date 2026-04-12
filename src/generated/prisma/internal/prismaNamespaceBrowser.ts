@@ -53,6 +53,7 @@ export const AnyNull = runtime.AnyNull
 export const ModelName = {
   User: 'User',
   DirectMessage: 'DirectMessage',
+  UserPresence: 'UserPresence',
   ServerNode: 'ServerNode',
   ServerScoreReport: 'ServerScoreReport',
   ServerScoreAggregate: 'ServerScoreAggregate'
@@ -95,6 +96,9 @@ export const DirectMessageScalarFieldEnum = {
   sender_public_key: 'sender_public_key',
   sender_x25519_public_key: 'sender_x25519_public_key',
   recipient_public_key: 'recipient_public_key',
+  origin_server_peer_id: 'origin_server_peer_id',
+  replica_peer_ids: 'replica_peer_ids',
+  is_replica_copy: 'is_replica_copy',
   message: 'message',
   message_hash: 'message_hash',
   sender_signature: 'sender_signature',
@@ -105,6 +109,18 @@ export const DirectMessageScalarFieldEnum = {
 } as const
 
 export type DirectMessageScalarFieldEnum = (typeof DirectMessageScalarFieldEnum)[keyof typeof DirectMessageScalarFieldEnum]
+
+
+export const UserPresenceScalarFieldEnum = {
+  public_key: 'public_key',
+  server_peer_id: 'server_peer_id',
+  observed_at: 'observed_at',
+  expires_at: 'expires_at',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type UserPresenceScalarFieldEnum = (typeof UserPresenceScalarFieldEnum)[keyof typeof UserPresenceScalarFieldEnum]
 
 
 export const ServerNodeScalarFieldEnum = {
